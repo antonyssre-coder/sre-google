@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f7f6">
+  <meta name="description" content="GKE observability automation overview, architecture, workflow, scope and Python source code.">
+  <title>GKE Observability Automation</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #202124;
+      --muted: #5f6368;
+      --line: #dadce0;
+      --paper: #ffffff;
+      --canvas: #f8f9fa;
+      --green: #34a853;
+      --green-dark: #188038;
+      --mint: #e6f4ea;
+      --mint-strong: #ceead6;
+      --amber: #fbbc04;
+      --amber-bg: #fef7e0;
+      --google-blue: #4285f4;
+      --google-red: #ea4335;
+      --google-yellow: #fbbc04;
+      --google-green: #34a853;
+      --shadow: 0 14px 36px rgba(60, 64, 67, .10);
+      --radius: 18px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--ink);
+      font: 16px/1.55 "Aptos", "Segoe UI", system-ui, sans-serif;
+    }
+    button, a { font: inherit; }
+    a { color: inherit; }
+    .shell { width: min(1180px, calc(100% - 48px)); margin: 0 auto; }
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      min-height: 76px; border-bottom: 1px solid var(--line);
+    }
+    .brand { display: flex; gap: 11px; align-items: center; font-weight: 750; letter-spacing: -.02em; }
+    .google-logo { display: block; width: 104px; height: 36px; object-fit: contain; }
+    .top-meta { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13px; }
+    .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--google-green); box-shadow: 0 0 0 4px #e6f4ea; }
+    .hero { padding: 44px 0 28px; display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 28px; }
+    .eyebrow { margin: 0 0 10px; color: var(--green); text-transform: uppercase; font-size: 11px; font-weight: 800; letter-spacing: .14em; }
+    h1 { max-width: 760px; margin: 0; font-size: clamp(34px, 5vw, 52px); letter-spacing: -.045em; line-height: 1.04; }
+    .hero-copy { max-width: 700px; margin: 16px 0 0; color: var(--muted); font-size: 17px; }
+    .threshold {
+      min-width: 185px; padding: 15px 18px; border: 1px solid #e5c79f;
+      border-radius: 14px; background: var(--amber-bg); text-align: left;
+    }
+    .threshold strong { display: block; color: #8c5418; font-size: 25px; line-height: 1.05; }
+    .threshold span { color: #765a3d; font-size: 12px; }
+    .nav-cards { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); align-items: stretch; gap: 12px; margin: 24px 0 22px; padding: 4px 2px 8px; overflow-x: auto; scroll-snap-type: x proximity; }
+    .nav-card {
+      position: relative; min-width: 0; height: 112px; padding: 15px 12px 13px 15px; scroll-snap-align: start;
+      display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+      color: var(--ink); text-decoration: none; background: var(--paper);
+      border: 1px solid var(--line); border-left: 4px solid var(--card-color); border-radius: 15px; box-shadow: 0 3px 12px rgba(60,64,67,.04);
+      transition: border-color .22s ease, box-shadow .22s ease, background-color .22s ease;
+    }
+    .nav-card:hover { border-color: var(--card-color); box-shadow: var(--shadow); }
+    .nav-card:focus-visible { outline: 3px solid #a8c7fa; outline-offset: 3px; }
+    .nav-card:nth-child(1) { --card-color: var(--google-blue); --card-tint: #e8f0fe; }
+    .nav-card:nth-child(2) { --card-color: var(--google-red); --card-tint: #fce8e6; }
+    .nav-card:nth-child(3) { --card-color: var(--google-yellow); --card-tint: #fef7e0; }
+    .nav-card:nth-child(4) { --card-color: var(--google-blue); --card-tint: #e8f0fe; }
+    .nav-card:nth-child(5) { --card-color: var(--google-green); --card-tint: #e6f4ea; }
+    .nav-card:nth-child(6) { --card-color: var(--google-red); --card-tint: #fce8e6; }
+    .nav-card[aria-current="page"] { border-color: var(--card-color); border-left-color: var(--card-color); background: linear-gradient(145deg, #fff 65%, var(--card-tint)); box-shadow: var(--shadow); }
+    .nav-card strong { min-height: 36px; display: flex; align-items: flex-end; font-size: 14px; line-height: 1.25; letter-spacing: -.015em; }
+    .nav-card small { color: var(--muted); font-size: 11px; line-height: 1.35; }
+    main { min-height: 480px; }
+    .panel {
+      padding: clamp(22px, 4vw, 38px); margin-bottom: 26px; background: var(--paper);
+      border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+    }
+    .panel[hidden] { display: none; }
+    .panel:not([hidden]) { animation: panel-enter .28s cubic-bezier(.2,.7,.25,1) both; }
+    @keyframes panel-enter { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: translateY(0); } }
+    .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 25px; }
+    .panel-kicker { margin: 0 0 6px; color: var(--green); text-transform: uppercase; letter-spacing: .12em; font-size: 11px; font-weight: 800; }
+    h2 { margin: 0; font-size: clamp(25px, 3vw, 34px); letter-spacing: -.035em; line-height: 1.15; }
+    .panel-intro { max-width: 680px; margin: 9px 0 0; color: var(--muted); }
+    .tag { flex: none; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: #fafcfb; font-size: 12px; }
+    .overview-grid { display: grid; grid-template-columns: 1.25fr .75fr; gap: 28px; }
+    .scope-statement { padding: 23px 25px; border-left: 4px solid var(--google-blue); border-radius: 0 14px 14px 0; background: #f8faff; }
+    .scope-statement p { margin: 0; font-size: 18px; line-height: 1.55; }
+    .scope-statement strong { color: var(--green-dark); }
+    .signal-list { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 18px; }
+    .signal { padding: 15px 16px; border: 1px solid var(--line); border-radius: 12px; }
+    .signal b { display: block; margin-bottom: 3px; font-size: 14px; }
+    .signal span { color: var(--muted); font-size: 13px; }
+    .side-note { padding: 19px; border-radius: 14px; background: #f7f8f7; }
+    .side-note h3 { margin: 0 0 9px; font-size: 16px; }
+    .side-note p { margin: 0; color: var(--muted); font-size: 14px; }
+    .side-note .metric { display: flex; justify-content: space-between; padding: 9px 0; border-top: 1px solid var(--line); font-size: 13px; }
+    .side-note .metric:first-of-type { margin-top: 13px; }
+    .side-note .metric strong { color: var(--green-dark); }
+    .problem-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .problem-card { min-height: 145px; padding: 20px; border: 1px solid var(--line); border-radius: 14px; }
+    .problem-card h3 { margin: 0 0 8px; font-size: 16px; }
+    .problem-card p { margin: 0; color: var(--muted); font-size: 14px; }
+    .problem-card.highlight { background: #f8faff; border-color: #c6dafc; }
+    .architecture-wrap { overflow-x: auto; padding: 8px 0 2px; }
+    .architecture { display: block; width: 100%; min-width: 760px; height: auto; }
+    .architecture text { font-family: "Aptos", "Segoe UI", system-ui, sans-serif; fill: var(--ink); }
+    .architecture .label { font-size: 16px; font-weight: 700; }
+    .architecture .detail { font-size: 12px; fill: var(--muted); }
+    .architecture .node { fill: #fff; stroke: #cbd9d1; stroke-width: 1.5; }
+    .architecture .source { fill: #f5f8f6; }
+    .architecture .collector { fill: #e8f0fe; stroke: var(--google-blue); stroke-width: 2; }
+    .architecture .output { fill: #e6f4ea; }
+    .architecture .alert { fill: #fce8e6; stroke: var(--google-red); }
+    .architecture .wire { fill: none; stroke: #7b9bd1; stroke-width: 2; marker-end: url(#arrow); }
+    .arch-note { display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: 17px; color: var(--muted); font-size: 13px; }
+    .arch-note span::before { display: inline-block; width: 7px; height: 7px; margin: 0 8px 1px 0; border-radius: 50%; background: var(--green); content: ""; }
+    .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; counter-reset: flow; }
+    .flow-step { position: relative; padding: 0 20px 0 0; counter-increment: flow; }
+    .flow-step:not(:last-child)::after { position: absolute; top: 17px; left: 43px; right: 9px; height: 1px; background: #c6dafc; content: ""; }
+    .flow-number { position: relative; z-index: 1; display: grid; place-items: center; width: 36px; height: 36px; margin-bottom: 14px; border: 1px solid #a8c7fa; border-radius: 50%; color: #174ea6; background: #e8f0fe; font: 700 13px ui-monospace, monospace; }
+    .flow-step:nth-child(4) .flow-number { border-color: #f6aea9; color: #b3261e; background: #fce8e6; }
+    .flow-step:nth-child(5) .flow-number { border-color: #fce8b2; color: #8d5b00; background: #fef7e0; }
+    .flow-step h3 { margin: 0 0 7px; font-size: 15px; }
+    .flow-step p { max-width: 185px; margin: 0; color: var(--muted); font-size: 13px; }
+    .flow-callout { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 20px; margin-top: 30px; padding: 17px 20px; border: 1px solid #d8e5de; border-radius: 13px; background: #f7faf8; }
+    .flow-callout p { margin: 0; color: var(--muted); font-size: 14px; }
+    .flow-callout strong { color: var(--ink); }
+    .mini-threshold { padding: 9px 13px; border-radius: 10px; color: #8a561d; background: var(--amber-bg); font-size: 13px; font-weight: 750; white-space: nowrap; }
+    .scope-layout { display: grid; grid-template-columns: 1fr; gap: 24px; align-items: start; }
+    .included h3, .code-header h3 { margin: 0 0 11px; font-size: 16px; }
+    .included ul { margin: 0; padding-left: 19px; color: var(--muted); font-size: 14px; }
+    .included li + li { margin-top: 7px; }
+    .how-it-works { margin-top: 24px; padding-top: 19px; border-top: 1px solid var(--line); }
+    .how-it-works h3 { margin: 0 0 10px; font-size: 16px; }
+    .process-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; counter-reset: process; }
+    .process-list li { position: relative; min-height: 30px; padding-left: 36px; color: var(--muted); font-size: 13px; line-height: 1.45; counter-increment: process; }
+    .process-list li::before { position: absolute; top: 0; left: 0; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; color: var(--green-dark); background: var(--mint); content: counter(process, decimal-leading-zero); font: 700 9px ui-monospace, monospace; }
+    .process-list strong { color: var(--ink); }
+    .formula-note { margin-top: 13px; padding: 11px 12px; border-left: 3px solid var(--google-yellow); border-radius: 0 8px 8px 0; color: #735735; background: var(--amber-bg); font-size: 12px; line-height: 1.45; }
+    .code-box { overflow: hidden; border: 1px solid #263b34; border-radius: 13px; background: #10221c; }
+    .code-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 15px; border-bottom: 1px solid #294139; color: #e8f1ec; }
+    .code-header h3 { margin: 0; font-size: 13px; font-weight: 650; }
+    .code-meta { color: #a6bdb1; font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .copy-button { padding: 6px 10px; border: 1px solid #426253; border-radius: 7px; color: #e8f1ec; background: #1b342a; cursor: pointer; font-size: 12px; }
+    .copy-button:hover { background: #264838; }
+    pre { max-height: 510px; overflow: auto; margin: 0; padding: 18px; color: #e4eee8; tab-size: 4; font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; white-space: pre; }
+    code { font: inherit; }
+    .code-state { color: #a6bdb1; }
+    .footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 0 28px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+    .footer a { color: var(--green-dark); text-decoration: none; }
+    .footer a:hover { text-decoration: underline; }
+    .footer-owner { margin-left: auto; color: var(--ink); font-weight: 700; white-space: nowrap; }
+    @media (max-width: 900px) {
+      .nav-cards { grid-template-columns: repeat(6, minmax(154px, 1fr)); }
+      .overview-grid, .scope-layout { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: repeat(3, 1fr); gap: 22px 0; }
+      .flow-step:nth-child(3)::after { display: none; }
+    }
+    @media (max-width: 600px) {
+      .shell { width: min(100% - 28px, 1180px); }
+      .topbar { min-height: 64px; }
+      .brand { font-size: 14px; }
+      .top-meta { font-size: 11px; }
+      .hero { grid-template-columns: 1fr; gap: 18px; padding-top: 32px; }
+      .threshold { width: 100%; display: flex; align-items: center; justify-content: space-between; }
+      .threshold strong { font-size: 22px; }
+      .nav-cards { grid-template-columns: repeat(6, minmax(154px, 1fr)); gap: 9px; margin-top: 19px; }
+      .nav-card { height: 100px; padding: 13px 10px 11px 14px; }
+      .nav-card strong { min-height: 34px; }
+      .panel-head { display: block; }
+      .panel-head .tag { display: inline-block; margin-top: 12px; }
+      .signal-list, .problem-grid { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: 1fr; gap: 0; }
+      .flow-step { display: grid; grid-template-columns: 42px 1fr; gap: 0 10px; padding: 0 0 18px; }
+      .flow-step:not(:last-child)::after { top: 36px; bottom: 0; left: 17px; right: auto; width: 1px; height: auto; }
+      .flow-number { grid-row: span 2; margin: 0; }
+      .flow-step p { max-width: none; }
+      .flow-callout { grid-template-columns: 1fr; }
+      .mini-threshold { justify-self: start; }
+      .footer { align-items: flex-start; flex-direction: column; }
+      .footer-owner { margin-left: 0; }
+      pre { max-height: 420px; font-size: 11px; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
+  </style>
+</head>
+<body>
+  <header class="shell topbar">
+    <div class="brand"><img class="google-logo" src="google-logo.png" alt="Google"></div>
+    <div class="top-meta"><span class="live-dot" aria-hidden="true"></span><span>Read-only collector · GKE / Kubernetes</span></div>
+  </header>
+
+  <div class="shell">
+    <section class="hero" aria-labelledby="page-title">
+      <div>
+        <p class="eyebrow">Project overview</p>
+        <h1 id="page-title">GKE Observability Automation</h1>
+        <p class="hero-copy">A read-only Python collector gathers cluster health and telemetry, evaluates node CPU and memory, and writes a timestamped snapshot for the operations team.</p>
+      </div>
+      <div class="threshold" aria-label="Default resource threshold is 80 percent">
+        <strong>80%</strong><span>default CPU / memory threshold</span>
+      </div>
+    </section>
+
+    <nav class="nav-cards" aria-label="Project sections">
+      <a class="nav-card" href="#overview" data-section="overview" aria-current="page"><strong>Overview</strong><small>Purpose and boundaries</small></a>
+      <a class="nav-card" href="#use-case" data-section="use-case"><strong>Use Case / Problem</strong><small>Why automate collection</small></a>
+      <a class="nav-card" href="#architecture" data-section="architecture"><strong>Architecture</strong><small>Sources, collector, outputs</small></a>
+      <a class="nav-card" href="#automation-flow" data-section="automation-flow"><strong>Automation Flow</strong><small>What happens each run</small></a>
+      <a class="nav-card" href="#scope" data-section="scope"><strong>Scope</strong><small>Included signals and boundaries</small></a>
+      <a class="nav-card" href="#code-base" data-section="code-base"><strong>Code base</strong><small>Python collector source</small></a>
+    </nav>
+
+    <main id="content" aria-live="polite">
+      <section class="panel" id="overview" data-panel="overview" aria-labelledby="overview-title">
+        <div class="panel-head">
+          <div><p class="panel-kicker">01 · Overview</p><h2 id="overview-title">A bounded, read-only observability run</h2><p class="panel-intro">The automation collects operational signals from a configured GKE or Kubernetes cluster and produces one reviewable snapshot.</p></div>
+          <span class="tag">On demand or scheduled</span>
+        </div>
+        <div class="overview-grid">
+          <div>
+            <div class="scope-statement"><p><strong>Scope:</strong> read cluster objects and recent logs, collect current resource metrics, query optional telemetry backends, check basic health, and flag node CPU or memory at the configured threshold.</p></div>
+            <div class="signal-list">
+              <div class="signal"><b>Cluster state</b><span>Nodes, pods, deployments, services, events</span></div>
+              <div class="signal"><b>Recent logs</b><span>Bounded by namespace, age, lines, and pod count</span></div>
+              <div class="signal"><b>CPU + memory</b><span>Metrics Server samples compared with allocatable capacity</span></div>
+              <div class="signal"><b>History + traces</b><span>Optional Prometheus ranges and backend-specific trace search</span></div>
+            </div>
+          </div>
+          <aside class="side-note">
+            <h3>What the run returns</h3>
+            <p>A timestamped JSON file with health status, collected signals, threshold breaches, and section errors.</p>
+            <div class="metric"><span>Default threshold</span><strong>80% inclusive</strong></div>
+            <div class="metric"><span>Cluster changes</span><strong>None</strong></div>
+            <div class="metric"><span>Alert path</span><strong>Optional SMTP</strong></div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="panel" id="use-case" data-panel="use-case" aria-labelledby="use-case-title" hidden>
+        <div class="panel-head"><div><p class="panel-kicker">02 · Use case / problem statement</p><h2 id="use-case-title">Cluster signals are spread across separate tools</h2><p class="panel-intro">Operators need a repeatable first-pass health check without manually collecting each signal from multiple endpoints.</p></div><span class="tag">Operational problem</span></div>
+        <div class="problem-grid">
+          <article class="problem-card"><h3>Manual collection takes time</h3><p>Cluster state, recent logs, metrics, Prometheus history, and trace search live behind different APIs and queries.</p></article>
+          <article class="problem-card"><h3>Snapshots are hard to compare</h3><p>Without a consistent collection window and output shape, an incident handoff can miss context or use stale readings.</p></article>
+          <article class="problem-card"><h3>Resource pressure needs a clear signal</h3><p>CPU and memory should be evaluated against node capacity, with one configurable threshold and an explicit breach list.</p></article>
+          <article class="problem-card highlight"><h3>Automation response</h3><p>Run one read-only collector to join the available signals, summarize basic health, record partial failures, and notify the configured team when a threshold is reached.</p></article>
+        </div>
+      </section>
+
+      <section class="panel" id="architecture" data-panel="architecture" aria-labelledby="architecture-title" hidden>
+        <div class="panel-head"><div><p class="panel-kicker">03 · Architecture</p><h2 id="architecture-title">Four signal paths feed one collector</h2><p class="panel-intro">Kubernetes and Metrics Server are the core sources. Prometheus and trace search are enabled only when configured.</p></div><span class="tag">Read-only data path</span></div>
+        <div class="architecture-wrap">
+          <svg class="architecture" viewBox="0 0 1040 390" role="img" aria-labelledby="architecture-svg-title architecture-svg-desc">
+            <title id="architecture-svg-title">GKE observability collector architecture</title>
+            <desc id="architecture-svg-desc">Kubernetes API, Metrics Server, Prometheus, and a trace search API feed a Python collector. The collector evaluates health and thresholds, writes a JSON snapshot, and can send an SMTP email alert.</desc>
+            <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#729984"></path></marker></defs>
+            <path class="wire" d="M248 73 H340 V174 H390"></path>
+            <path class="wire" d="M248 153 H390"></path>
+            <path class="wire" d="M248 233 H390"></path>
+            <path class="wire" d="M248 313 H340 V216 H390"></path>
+            <path class="wire" d="M650 195 H700"></path>
+            <path class="wire" d="M880 195 H900 V105 H920"></path>
+            <path class="wire" d="M880 195 H900 V285 H920"></path>
+            <rect class="node source" x="20" y="42" width="228" height="62" rx="12"></rect>
+            <text class="label" x="38" y="68">Kubernetes API</text><text class="detail" x="38" y="88">Inventory · events · pod logs</text>
+            <rect class="node source" x="20" y="122" width="228" height="62" rx="12"></rect>
+            <text class="label" x="38" y="148">Metrics Server</text><text class="detail" x="38" y="168">Current node and pod usage</text>
+            <rect class="node source" x="20" y="202" width="228" height="62" rx="12"></rect>
+            <text class="label" x="38" y="228">Prometheus · optional</text><text class="detail" x="38" y="248">Configured PromQL range queries</text>
+            <rect class="node source" x="20" y="282" width="228" height="62" rx="12"></rect>
+            <text class="label" x="38" y="308">Trace search · optional</text><text class="detail" x="38" y="328">Backend-specific query endpoint</text>
+            <rect class="node collector" x="390" y="135" width="260" height="120" rx="18"></rect>
+            <text class="label" x="420" y="178">Python collector</text><text class="detail" x="420" y="202">Kubeconfig · bounded reads</text><text class="detail" x="420" y="222">health · 80% threshold · errors</text>
+            <rect class="node output" x="700" y="150" width="180" height="90" rx="14"></rect>
+            <text class="label" x="719" y="178">Health check</text><text class="detail" x="719" y="201">80% CPU / memory</text><text class="detail" x="719" y="221">Node and pod state</text>
+            <rect class="node output" x="920" y="70" width="110" height="70" rx="12"></rect>
+            <text class="label" x="937" y="100">JSON</text><text class="detail" x="937" y="120">snapshot</text>
+            <rect class="node alert" x="920" y="250" width="110" height="70" rx="12"></rect>
+            <text class="label" x="937" y="280">SMTP</text><text class="detail" x="937" y="300">optional alert</text>
+          </svg>
+        </div>
+        <div class="arch-note"><span>Metrics Server is point-in-time</span><span>Prometheus provides history</span><span>Trace search depends on the backend API</span><span>OTLP is ingest-only</span></div>
+      </section>
+
+      <section class="panel" id="automation-flow" data-panel="automation-flow" aria-labelledby="flow-title" hidden>
+        <div class="panel-head"><div><p class="panel-kicker">04 · Automation flow</p><h2 id="flow-title">One run moves from config to an actionable snapshot</h2><p class="panel-intro">Core collection is independent by section, so a backend error is recorded without hiding other available results.</p></div><span class="tag">Python · YAML config</span></div>
+        <div class="flow">
+          <article class="flow-step"><span class="flow-number">01</span><h3>Load config</h3><p>Resolve cluster name, kubeconfig context, collection bounds, and optional backends.</p></article>
+          <article class="flow-step"><span class="flow-number">02</span><h3>Read cluster</h3><p>Collect version, nodes, namespaces, pods, workloads, services, events, and recent logs.</p></article>
+          <article class="flow-step"><span class="flow-number">03</span><h3>Collect telemetry</h3><p>Read current resource metrics; run configured Prometheus and trace queries.</p></article>
+          <article class="flow-step"><span class="flow-number">04</span><h3>Evaluate health</h3><p>Check API reachability, node readiness, pod phases, and per-node resource use.</p></article>
+          <article class="flow-step"><span class="flow-number">05</span><h3>Save and alert</h3><p>Write a UTC-stamped JSON snapshot and email the team on an enabled breach.</p></article>
+        </div>
+        <div class="flow-callout"><p><strong>Health becomes degraded</strong> when the API is unreachable, nodes or pods are unhealthy, core data is missing, or either node metric reaches its threshold. SMTP errors are recorded in the snapshot.</p><span class="mini-threshold">CPU ≥ 80% · Memory ≥ 80%</span></div>
+      </section>
+
+      <section class="panel" id="scope" data-panel="scope" aria-labelledby="scope-title" hidden>
+        <div class="panel-head"><div><p class="panel-kicker">05 · Scope and raw code</p><h2 id="scope-title">What the automation reads and returns</h2><p class="panel-intro">The code panel below loads the current <code>k8s_observability.py</code> file from this project.</p></div><span class="tag">Project source</span></div>
+        <div class="scope-layout">
+          <div class="included">
+            <h3>Included</h3>
+            <ul>
+              <li>Read-only Kubernetes inventory, events, and bounded recent pod logs.</li>
+              <li>Current node and pod CPU/memory samples from Metrics Server.</li>
+              <li>Node usage percentages against allocatable capacity; default threshold is 80% inclusive.</li>
+              <li>Optional Prometheus range queries and backend-specific trace search.</li>
+              <li>Health summary, threshold breach list, JSON snapshot, optional SMTP notification.</li>
+            </ul>
+            <h3 style="margin-top:24px">Operational boundary</h3>
+            <ul><li>No agents installed and no cluster resources changed.</li><li>Long-term logs and traces remain in their configured backends.</li></ul>
+            <div class="how-it-works">
+              <h3>How the Python collector works</h3>
+              <ol class="process-list">
+                <li><strong>Load configuration.</strong> Read the cluster context, collection limits, threshold, and optional backend settings from YAML.</li>
+                <li><strong>Connect and collect.</strong> Use the Kubernetes client to read inventory, events, and recent logs; section failures are recorded.</li>
+                <li><strong>Read telemetry.</strong> Fetch current Metrics Server samples, then query Prometheus and the trace search endpoint when enabled.</li>
+                <li><strong>Evaluate health.</strong> Convert CPU and memory quantities, compare each node with allocatable capacity, and check API, node, and pod status.</li>
+                <li><strong>Write and notify.</strong> Combine results and errors in a UTC-stamped JSON file; send SMTP email for a threshold breach when configured.</li>
+              </ol>
+              <div class="formula-note"><strong>Threshold math:</strong> CPU % = used cores ÷ allocatable cores. Memory % = used bytes ÷ allocatable bytes. The default breach point is 80% inclusive. Metrics Server is a current sample; Prometheus supplies history.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="panel" id="code-base" data-panel="code-base" aria-labelledby="code-base-title" hidden>
+        <div class="panel-head"><div><p class="panel-kicker">Code base</p><h2 id="code-base-title">Python collector source</h2><p class="panel-intro">Current raw source from <code>k8s_observability.py</code>, loaded directly from this project folder.</p></div><span class="tag">Read only</span></div>
+        <div class="code-box">
+          <div class="code-header"><div><h3>k8s_observability.py</h3><span class="code-meta" id="code-meta">Loading source…</span></div><button class="copy-button" id="copy-code" type="button">Copy code</button></div>
+          <pre><code id="raw-code" class="code-state">Loading the current project source…</code></pre>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer"><strong>SITE RELIABILITY ENGINEERING <span>— Observability</span></strong><span>Source: <a href="k8s_observability.py">k8s_observability.py</a> · Config: <a href="cluster_config.yaml">cluster_config.yaml</a></span><span class="footer-owner">Wipro internal - Antony</span></footer>
+  </div>
+
+  <script>
+    (() => {
+      const cards = [...document.querySelectorAll('[data-section]')];
+      const panels = [...document.querySelectorAll('[data-panel]')];
+      const codeNode = document.getElementById('raw-code');
+      const codeMeta = document.getElementById('code-meta');
+      let codeText = '';
+
+      function openSection(id, updateHistory = false) {
+        const exists = panels.some(panel => panel.dataset.panel === id);
+        const selected = exists ? id : 'overview';
+        for (const panel of panels) panel.hidden = panel.dataset.panel !== selected;
+        for (const card of cards) {
+          if (card.dataset.section === selected) card.setAttribute('aria-current', 'page');
+          else card.removeAttribute('aria-current');
+        }
+        if (updateHistory && location.hash !== `#${selected}`) history.pushState(null, '', `#${selected}`);
+        if (selected === 'code-base') loadSource();
+      }
+
+      async function loadSource() {
+        if (codeText) return;
+        try {
+          const response = await fetch('./k8s_observability.py', { cache: 'no-store' });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          codeText = await response.text();
+          codeNode.textContent = codeText;
+          codeNode.classList.remove('code-state');
+          codeMeta.textContent = `${codeText.split('\n').length} lines · loaded from project`;
+        } catch (error) {
+          codeNode.textContent = 'The source file could not be loaded. Serve this folder over HTTP to display the raw Python code.\n\nRun: python -m http.server 8000\nThen open: http://localhost:8000';
+          codeMeta.textContent = 'Source unavailable';
+        }
+      }
+
+      for (const card of cards) card.addEventListener('click', event => {
+        event.preventDefault();
+        const id = card.dataset.section;
+        openSection(id, true);
+      });
+      window.addEventListener('popstate', () => openSection(location.hash.slice(1)));
+      window.addEventListener('hashchange', () => openSection(location.hash.slice(1)));
+      document.getElementById('copy-code').addEventListener('click', async event => {
+        await loadSource();
+        if (!codeText) {
+          event.currentTarget.textContent = 'Source unavailable';
+          setTimeout(() => { event.currentTarget.textContent = 'Copy code'; }, 1800);
+          return;
+        }
+        try {
+          await navigator.clipboard.writeText(codeText);
+          event.currentTarget.textContent = 'Copied';
+          setTimeout(() => { event.currentTarget.textContent = 'Copy code'; }, 1400);
+        } catch {
+          event.currentTarget.textContent = 'Select code to copy';
+          setTimeout(() => { event.currentTarget.textContent = 'Copy code'; }, 1800);
+        }
+      });
+      openSection(location.hash.slice(1));
+    })();
+  </script>
+</body>
+</html>
