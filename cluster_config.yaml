@@ -1,0 +1,47 @@
+# Copy this file per environment; use a distinct context/name for each cluster.
+cluster:
+  name: dev-cluster
+  kubeconfig: "~/.kube/config"  # null uses the Kubernetes client default
+  context: ""                   # empty uses current-context
+
+collection:
+  output_dir: "./output"
+  namespaces: []                 # [] means all namespaces
+  event_limit: 1000
+  metrics_api: true              # requires metrics-server and metrics.k8s.io access
+  alert_threshold_percent: 80    # node usage / allocatable; inclusive threshold
+  pod_logs:
+    enabled: true
+    label_selector: ""           # e.g. app.kubernetes.io/part-of=payments
+    tail_lines: 500
+    since_seconds: 3600
+    max_pods: 200                 # guardrail against oversized snapshots
+
+backends:
+  prometheus:
+    enabled: false
+    url: "http://prometheus.monitoring.svc:9090"
+    token_env: "PROMETHEUS_TOKEN" # token is read from environment, never stored here
+    range_seconds: 3600
+    step: "60s"
+    timeout_seconds: 20
+    queries:
+      node_cpu_cores: "sum by (instance) (rate(node_cpu_seconds_total{mode!=\"idle\"}[5m]))"
+      pod_memory_bytes: "sum by (namespace,pod) (container_memory_working_set_bytes)"
+      workload_restarts: "sum by (namespace,pod) (kube_pod_container_status_restarts_total)"
+  traces:
+    enabled: false
+    query_url: ""               # backend query/search URL; OTLP is ingest-only
+    token_env: "TRACE_BACKEND_TOKEN"
+    timeout_seconds: 20
+    params: {}                    # backend-specific search parameters
+  email_alerts:
+    enabled: false
+    smtp_host: "smtp.example.com"
+    smtp_port: 587
+    starttls: true
+    from: "k8s-alerts@example.com"
+    to: ["sre-team@example.com"] # route to the responsible on-call/team mailbox
+    username_env: "SMTP_USERNAME"
+    password_env: "SMTP_PASSWORD"
+    timeout_seconds: 20

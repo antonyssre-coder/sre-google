@@ -1,0 +1,32 @@
+# Bind this ClusterRole to a dedicated ServiceAccount or user.
+# Log access is a separate subresource permission and is explicitly included.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sre-observability-reader
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "namespaces", "pods", "services", "events"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes", "pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sre-observability-reader
+subjects:
+  - kind: ServiceAccount
+    name: sre-observability-reader
+    namespace: monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sre-observability-reader
