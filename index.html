@@ -31,13 +31,16 @@
     html { scroll-behavior: smooth; }
     body {
       margin: 0;
+      position: relative;
+      isolation: isolate;
       background: var(--canvas);
       color: var(--ink);
       font: 16px/1.55 "Aptos", "Segoe UI", system-ui, sans-serif;
     }
+    .page-brand-watermark { position: fixed; z-index: 0; inset: 0; pointer-events: none; background: url("google-logo.png") center 52% / min(42vw, 520px) auto no-repeat; opacity: .24; }
     button, a { font: inherit; }
     a { color: inherit; }
-    .shell { width: min(1180px, calc(100% - 48px)); margin: 0 auto; }
+    .shell { position: relative; z-index: 1; width: min(1180px, calc(100% - 48px)); margin: 0 auto; }
     .topbar {
       display: flex; align-items: center; justify-content: space-between;
       min-height: 76px; border-bottom: 1px solid var(--line);
@@ -156,6 +159,10 @@
     .footer a { color: var(--green-dark); text-decoration: none; }
     .footer a:hover { text-decoration: underline; }
     .footer-owner { margin-left: auto; color: var(--ink); font-weight: 700; white-space: nowrap; }
+    .team-watermark { position: relative; z-index: 1; overflow: hidden; margin: 0 -24px; padding: 8px 0 11px; border-top: 1px solid rgba(218,220,224,.7); color: #5f6368; opacity: .30; white-space: nowrap; }
+    .team-watermark-track { display: flex; width: max-content; animation: watermark-scroll 32s linear infinite; }
+    .team-watermark-track span { padding-right: 42px; font-size: 18px; font-weight: 750; letter-spacing: .13em; }
+    @keyframes watermark-scroll { to { transform: translateX(-50%); } }
     @media (max-width: 900px) {
       .nav-cards { grid-template-columns: repeat(6, minmax(154px, 1fr)); }
       .overview-grid, .scope-layout { grid-template-columns: 1fr; }
@@ -164,6 +171,7 @@
     }
     @media (max-width: 600px) {
       .shell { width: min(100% - 28px, 1180px); }
+      .page-brand-watermark { background-size: min(70vw, 360px) auto; }
       .topbar { min-height: 64px; }
       .brand { font-size: 14px; }
       .top-meta { font-size: 11px; }
@@ -185,12 +193,14 @@
       .mini-threshold { justify-self: start; }
       .footer { align-items: flex-start; flex-direction: column; }
       .footer-owner { margin-left: 0; }
+      .team-watermark { margin: 0 -14px; }
       pre { max-height: 420px; font-size: 11px; }
     }
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
   </style>
 </head>
 <body>
+  <div class="page-brand-watermark" aria-hidden="true"></div>
   <header class="shell topbar">
     <div class="brand"><img class="google-logo" src="google-logo.png" alt="Google"></div>
     <div class="top-meta"><span class="live-dot" aria-hidden="true"></span><span>Read-only collector · GKE / Kubernetes</span></div>
@@ -338,6 +348,7 @@
     </main>
 
     <footer class="footer"><strong>SITE RELIABILITY ENGINEERING <span>— Observability</span></strong><span>Source: <a href="k8s_observability.py">k8s_observability.py</a> · Config: <a href="cluster_config.yaml">cluster_config.yaml</a></span><span class="footer-owner">Wipro internal - Antony</span></footer>
+    <div class="team-watermark" role="img" aria-label="WIPRO - SRE Team"><div class="team-watermark-track" aria-hidden="true"><span>WIPRO - SRE Team&nbsp;&nbsp;•&nbsp;&nbsp;</span><span>WIPRO - SRE Team&nbsp;&nbsp;•&nbsp;&nbsp;</span><span>WIPRO - SRE Team&nbsp;&nbsp;•&nbsp;&nbsp;</span><span>WIPRO - SRE Team&nbsp;&nbsp;•&nbsp;&nbsp;</span></div></div>
   </div>
 
   <script>
