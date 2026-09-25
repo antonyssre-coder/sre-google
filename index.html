@@ -1,0 +1,658 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f8f9fa">
+  <meta name="description" content="Technical overview of the GKE reporting, signal correlation and pod failure notification automation.">
+  <title>GKE Reporting &amp; Correlation Engine</title>
+  <style>
+    :root {
+      color-scheme: light; --ink:#202124; --muted:#5f6368; --line:#dadce0; --paper:#fff; --canvas:#f8f9fa;
+      --blue:#4285f4; --red:#ea4335; --yellow:#fbbc04; --green:#34a853; --green-dark:#188038;
+      --shadow:0 14px 36px rgba(60,64,67,.10); --radius:18px;
+    }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; position:relative; isolation:isolate; background:var(--canvas); color:var(--ink); font:16px/1.55 "Aptos","Segoe UI",system-ui,sans-serif; }
+    .watermark { position:fixed; z-index:0; inset:0; pointer-events:none; background:url("../google-logo.png") center 52% / min(42vw,520px) auto no-repeat; opacity:.16; }
+    a,button { font:inherit; }
+    .shell { position:relative; z-index:1; width:min(1180px,calc(100% - 48px)); margin:0 auto; }
+    .topbar { min-height:76px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); }
+    .brand img { display:block; width:104px; height:36px; object-fit:contain; }
+    .brand-caption { color:var(--muted); font-size:13px; }
+    .hero { display:grid; grid-template-columns:1fr; align-items:end; gap:28px; padding:42px 0 25px; }
+    .eyebrow,.kicker { margin:0 0 9px; color:var(--green-dark); text-transform:uppercase; font-size:11px; font-weight:800; letter-spacing:.13em; }
+    h1 { max-width:800px; margin:0; font-size:clamp(32px,5vw,50px); letter-spacing:-.045em; line-height:1.06; }
+    .hero-copy { max-width:760px; margin:14px 0 0; color:var(--muted); font-size:17px; }
+    .nav-cards { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:12px; margin:20px 0 22px; padding:3px 2px 8px; overflow-x:auto; scroll-snap-type:x proximity; }
+    .nav-card { min-width:0; height:104px; padding:14px 12px 12px 14px; display:flex; flex-direction:column; align-items:flex-start; gap:6px; scroll-snap-align:start; color:var(--ink); text-decoration:none; background:var(--paper); border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:15px; box-shadow:0 3px 12px rgba(60,64,67,.04); transition:border-color .2s,box-shadow .2s,background .2s; }
+    .nav-card:nth-child(1) { --accent:var(--blue); --tint:#e8f0fe; }
+    .nav-card:nth-child(2) { --accent:var(--red); --tint:#fce8e6; }
+    .nav-card:nth-child(3) { --accent:var(--yellow); --tint:#fef7e0; }
+    .nav-card:nth-child(4) { --accent:var(--blue); --tint:#e8f0fe; }
+    .nav-card:nth-child(5) { --accent:var(--green); --tint:#e6f4ea; }
+    .nav-card:nth-child(6) { --accent:var(--red); --tint:#fce8e6; }
+    .nav-card:hover,.nav-card[aria-current="page"] { border-color:var(--accent); box-shadow:var(--shadow); }
+    .nav-card[aria-current="page"] { background:linear-gradient(145deg,#fff 65%,var(--tint)); }
+    .nav-card:focus-visible,button:focus-visible { outline:3px solid #a8c7fa; outline-offset:3px; }
+    .nav-card strong { min-height:34px; display:flex; align-items:flex-end; font-size:14px; line-height:1.2; }
+    .nav-card small { color:var(--muted); font-size:11px; line-height:1.35; }
+    main { min-height:475px; }
+    .panel { margin-bottom:25px; padding:clamp(22px,4vw,38px); background:var(--paper); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow); }
+    .panel[hidden] { display:none; }
+    .panel:not([hidden]) { animation:enter .26s cubic-bezier(.2,.7,.25,1) both; }
+    @keyframes enter { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+    .panel-head { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; margin-bottom:24px; }
+    .panel-head h2 { margin:0; font-size:clamp(25px,3vw,34px); letter-spacing:-.035em; line-height:1.15; }
+    .intro { max-width:750px; margin:9px 0 0; color:var(--muted); }
+    .tag { flex:none; padding:6px 10px; color:var(--muted); background:#fafcfb; border:1px solid var(--line); border-radius:999px; font-size:12px; }
+    .grid-2 { display:grid; grid-template-columns:1.3fr .7fr; gap:20px; }
+    .statement { padding:21px 23px; border-left:4px solid var(--blue); border-radius:0 13px 13px 0; background:#f8faff; font-size:17px; }
+    .statement p { margin:0; }
+    .tiles { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:11px; margin-top:14px; }
+    .tile,.issue,.note { padding:16px; border:1px solid var(--line); border-radius:13px; background:#fff; }
+    button.tile { width:100%; appearance:none; color:var(--ink); text-align:left; font:inherit; cursor:pointer; transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease; }
+    button.tile:hover { transform:translateY(-2px); border-color:var(--blue); box-shadow:0 8px 20px rgba(66,133,244,.12); }
+    button.tile:focus-visible { outline:3px solid #a8c7fa; outline-offset:2px; }
+    .tile b,.issue b { display:block; margin-bottom:4px; font-size:14px; }
+    .tile span,.issue p,.note p { margin:0; color:var(--muted); font-size:13px; }
+    .note { background:#f7f8f7; }
+    .note h3 { margin:0 0 8px; font-size:16px; }
+    .note p { font-size:14px; }
+    .note ul { margin:12px 0 0; padding:12px 0 0 18px; border-top:1px solid var(--line); color:var(--muted); font-size:13px; }
+    .note li+li { margin-top:5px; }
+    .issues { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:13px; }
+    .issue { min-height:126px; }
+    button.issue { width:100%; appearance:none; color:var(--ink); text-align:left; font:inherit; cursor:pointer; transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease; }
+    button.issue:hover { transform:translateY(-2px); border-color:var(--blue); box-shadow:0 8px 20px rgba(66,133,244,.12); }
+    button.issue:focus-visible { outline:3px solid #a8c7fa; outline-offset:2px; }
+    .issue p { font-size:14px; }
+    .issue.highlight { background:#f8faff; border-color:#c6dafc; }
+    .diagram-wrap { overflow-x:auto; padding:7px 0; }
+    .diagram { display:block; width:100%; min-width:760px; height:auto; }
+    .diagram text { font-family:"Aptos","Segoe UI",system-ui,sans-serif; fill:var(--ink); }
+    .diagram .label { font-size:15px; font-weight:700; }
+    .diagram .detail { font-size:11px; fill:var(--muted); }
+    .diagram .box { fill:#fff; stroke:#cbd9d1; stroke-width:1.5; }
+    .diagram .source { fill:#f5f8f6; }
+    .diagram .engine { fill:#e8f0fe; stroke:var(--blue); stroke-width:2; }
+    .diagram .output { fill:#e6f4ea; }
+    .diagram .notify { fill:#fce8e6; stroke:var(--red); }
+    .diagram .line { fill:none; stroke:#7b9bd1; stroke-width:2.4; stroke-linecap:round; stroke-dasharray:8 7; marker-end:url(#arrow); animation:flow-dashes 1s linear infinite,flow-blink 1.8s ease-in-out infinite; }
+    .caption { margin:10px 0 0; color:var(--muted); font-size:13px; }
+    .architecture-diagram { min-width:940px; }
+    .architecture-diagram .group { fill:#f8faff; stroke:#c6dafc; stroke-width:1.5; }
+    .architecture-diagram .subbox { fill:#fff; stroke:#cbd9d1; stroke-width:1.2; }
+    .architecture-diagram .group-title { font-size:15px; font-weight:750; fill:#174ea6; }
+    .architecture-diagram .small { font-size:10px; fill:var(--muted); }
+    .architecture-diagram .architecture-card { cursor:pointer; }
+    .architecture-diagram text { pointer-events:none; }
+    .architecture-diagram .architecture-card:hover .box,.architecture-diagram .architecture-card:focus-visible .box,.architecture-diagram .architecture-card:hover .subbox,.architecture-diagram .architecture-card:focus-visible .subbox,.architecture-diagram rect.architecture-card:hover,.architecture-diagram rect.architecture-card:focus-visible { stroke:var(--blue); stroke-width:2.5; filter:drop-shadow(0 3px 5px rgba(66,133,244,.16)); }
+    .flow-diagram { display:block; width:100%; min-width:1080px; height:auto; }
+    .flow-diagram text { font-family:"Aptos","Segoe UI",system-ui,sans-serif; fill:var(--ink); }
+    .flow-diagram .step-box { fill:#fff; stroke:#cbd9d1; stroke-width:1.5; }
+    .flow-diagram .step-config { fill:#e8f0fe; stroke:var(--blue); }
+    .flow-diagram .step-collect { fill:#f5f8f6; }
+    .flow-diagram .step-assess { fill:#fef7e0; stroke:#e5c344; }
+    .flow-diagram .step-output { fill:#e6f4ea; stroke:var(--green); }
+    .flow-diagram .step-notify { fill:#fce8e6; stroke:var(--red); }
+    .flow-diagram .step-title { font-size:14px; font-weight:750; }
+    .flow-diagram .step-detail { font-size:11px; fill:var(--muted); }
+    .flow-diagram .flow-line { fill:none; stroke:#7393c8; stroke-width:2.4; stroke-linecap:round; stroke-dasharray:8 7; marker-end:url(#flow-arrow); animation:flow-dashes 1s linear infinite,flow-blink 1.8s ease-in-out infinite; }
+    .flow-diagram .flow-merge { fill:none; stroke:#7393c8; stroke-width:2.4; stroke-linecap:round; stroke-dasharray:8 7; animation:flow-dashes 1s linear infinite,flow-blink 1.8s ease-in-out infinite; }
+    @keyframes flow-dashes { to { stroke-dashoffset:-30; } }
+    @keyframes flow-blink { 0%,100% { opacity:.58; } 50% { opacity:1; } }
+    .flow-diagram .branch { fill:#fff8e1; stroke:#e5c344; stroke-width:1.5; }
+    .flow-diagram .branch-label { font-size:10px; font-weight:700; fill:#735735; }
+    .flow-diagram .stage-card { cursor:pointer; }
+    .flow-diagram .stage-card:hover .step-box,.flow-diagram .stage-card:focus-visible .step-box { stroke:var(--blue); stroke-width:2.8; filter:drop-shadow(0 3px 5px rgba(66,133,244,.18)); }
+    .flow-diagram .stage-card:hover .branch,.flow-diagram .stage-card:focus-visible .branch { stroke:var(--blue); stroke-width:2.8; filter:drop-shadow(0 3px 5px rgba(66,133,244,.18)); }
+    .diagram-legend { display:flex; flex-wrap:wrap; gap:9px 20px; margin:13px 0 0; color:var(--muted); font-size:12px; }
+    .legend-item { display:inline-flex; align-items:center; gap:7px; }
+    .legend-swatch { width:10px; height:10px; border-radius:3px; background:var(--swatch); }
+    .callout { margin-top:23px; padding:15px 18px; border:1px solid #d8e5de; border-radius:12px; background:#f7faf8; color:var(--muted); font-size:14px; }
+    .callout strong { color:var(--ink); }
+    .failure-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:11px; }
+    .failure { width:100%; padding:14px 15px; appearance:none; color:var(--ink); text-align:left; font:inherit; background:#fff; border:1px solid var(--line); border-radius:12px; cursor:pointer; transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease; }
+    .failure:hover { transform:translateY(-2px); border-color:var(--blue); box-shadow:0 8px 20px rgba(66,133,244,.12); }
+    .failure:focus-visible { outline:3px solid #a8c7fa; outline-offset:2px; }
+    .failure code { display:block; margin-bottom:5px; color:#174ea6; font-weight:750; font-size:13px; }
+    .failure span { color:var(--muted); font-size:13px; }
+    .failure-dialog { width:min(560px,calc(100% - 32px)); max-height:min(760px,calc(100dvh - 36px)); margin:auto; padding:0; overflow:auto; color:var(--ink); background:var(--paper); border:1px solid rgba(218,220,224,.9); border-radius:18px; box-shadow:0 24px 80px rgba(32,33,36,.3); }
+    .failure-dialog::backdrop { background:rgba(32,33,36,.62); backdrop-filter:blur(3px); }
+    .failure-dialog[open] { animation:dialog-in .2s ease-out both; }
+    @keyframes dialog-in { from { opacity:0; transform:translateY(8px) scale(.985); } to { opacity:1; transform:translateY(0) scale(1); } }
+    .dialog-head { display:flex; justify-content:space-between; align-items:flex-start; gap:15px; padding:22px 24px 17px; border-bottom:1px solid var(--line); background:linear-gradient(120deg,#f8faff,#fff); }
+    .dialog-code { display:inline-block; margin-bottom:6px; color:#174ea6; font:700 12px ui-monospace,SFMono-Regular,Consolas,monospace; }
+    .dialog-head h3 { margin:0; font-size:22px; line-height:1.2; letter-spacing:-.02em; }
+    .dialog-close { flex:none; display:grid; place-items:center; width:34px; height:34px; padding:0; color:var(--muted); background:#fff; border:1px solid var(--line); border-radius:50%; cursor:pointer; font-size:21px; line-height:1; }
+    .dialog-close:hover { color:var(--ink); background:#f1f3f4; }
+    .dialog-body { padding:19px 24px 24px; }
+    .dialog-body p { margin:0; color:var(--muted); font-size:14px; }
+    .dialog-body h4 { margin:17px 0 6px; font-size:13px; }
+    .dialog-body ul { margin:0; padding-left:19px; color:var(--muted); font-size:13px; }
+    .dialog-body li+li { margin-top:5px; }
+    .dialog-tip { margin-top:17px!important; padding:11px 13px; border-left:3px solid var(--yellow); border-radius:0 8px 8px 0; background:var(--amber-bg); }
+    .severity { display:inline-block; margin:0 0 16px; padding:6px 10px; border-radius:999px; color:#8a561d; background:#fef7e0; font-size:12px; font-weight:700; }
+    .scope-note { margin-top:17px; padding:13px 15px; border-left:3px solid var(--yellow); border-radius:0 9px 9px 0; background:#fef7e0; color:#735735; font-size:13px; }
+    .code-box { overflow:hidden; border:1px solid #263b34; border-radius:13px; background:#10221c; }
+    .code-header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 15px; border-bottom:1px solid #294139; color:#e8f1ec; }
+    .code-header h3 { margin:0; font-size:13px; }
+    .code-meta { display:block; color:#a6bdb1; font:11px ui-monospace,Consolas,monospace; }
+    .copy { padding:6px 10px; color:#e8f1ec; background:#1b342a; border:1px solid #426253; border-radius:7px; cursor:pointer; font-size:12px; }
+    pre { max-height:560px; overflow:auto; margin:0; padding:18px; color:#e4eee8; tab-size:4; font:12px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre; }
+    .footer { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:15px 0 24px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; }
+    .footer a { color:var(--green-dark); text-decoration:none; }
+    .owner { margin-left:auto; color:var(--ink); font-weight:700; white-space:nowrap; }
+    .ticker { overflow:hidden; margin:0 -24px; padding:8px 0 11px; border-top:1px solid rgba(218,220,224,.7); color:#5f6368; opacity:.3; white-space:nowrap; }
+    .ticker-track { display:flex; width:max-content; animation:slide 32s linear infinite; }
+    .ticker span { padding-right:42px; font-size:18px; font-weight:750; letter-spacing:.13em; }
+    @keyframes slide { to { transform:translateX(-50%); } }
+    @media(max-width:900px) { .nav-cards { grid-template-columns:repeat(6,minmax(154px,1fr)); } .grid-2 { grid-template-columns:1fr; } .flow { grid-template-columns:repeat(3,minmax(0,1fr)); row-gap:22px; } .step:nth-child(3)::after { display:none; } }
+    @media(max-width:600px) {
+      .shell { width:min(100% - 28px,1180px); } .watermark { background-size:min(70vw,360px) auto; }
+      .topbar { min-height:64px; } .brand-caption { font-size:11px; } .hero { grid-template-columns:1fr; gap:16px; padding-top:31px; }
+      .nav-cards { grid-template-columns:repeat(6,minmax(154px,1fr)); gap:9px; }
+      .nav-card { height:98px; } .panel-head { display:block; } .tag { display:inline-block; margin-top:12px; }
+      .tiles,.issues { grid-template-columns:1fr; } .failure-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .dialog-head { padding:19px 18px 15px; } .dialog-body { padding:17px 18px 20px; }
+      .footer { align-items:flex-start; flex-direction:column; } .owner { margin-left:0; } .ticker { margin:0 -14px; } pre { max-height:430px; font-size:11px; }
+    }
+    @media(prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; transition:none!important; animation:none!important; } }
+  </style>
+</head>
+<body>
+  <div class="watermark" aria-hidden="true"></div>
+  <header class="shell topbar">
+    <div class="brand"><img src="../google-logo.png" alt="Google"></div>
+    <span class="brand-caption">GKE reporting Â· correlation Â· incident triage</span>
+  </header>
+
+  <div class="shell">
+    <section class="hero" aria-labelledby="title">
+      <div>
+        <p class="eyebrow">SRE automation Â· technical overview</p>
+        <h1 id="title">GKE Reporting &amp; Correlation Engine</h1>
+        <p class="hero-copy">A Python runbook companion that brings together cluster metrics, Cloud Monitoring alerts, Cloud Logging evidence, and pod failure signals. It groups nearby evidence, prepares a rule-based RCA summary, and can notify the team.</p>
+      </div>
+    </section>
+
+    <nav class="nav-cards" aria-label="Automation sections">
+      <a class="nav-card" href="#overview" data-section="overview" aria-current="page"><strong>Overview</strong><small>Purpose and outputs</small></a>
+      <a class="nav-card" href="#problem" data-section="problem"><strong>Use Case</strong><small>Signals live in many places</small></a>
+      <a class="nav-card" href="#architecture" data-section="architecture"><strong>Architecture</strong><small>Sources through reporting</small></a>
+      <a class="nav-card" href="#flow" data-section="flow"><strong>Automation Flow</strong><small>What a run does</small></a>
+      <a class="nav-card" href="#pod-failures" data-section="pod-failures"><strong>Alert &amp; Monitoring</strong><small>Pod reasons and exit codes</small></a>
+      <a class="nav-card" href="#code-base" data-section="code-base"><strong>Code base</strong><small>Python source explained</small></a>
+    </nav>
+
+    <main id="content" aria-live="polite">
+      <section class="panel" id="overview" data-panel="overview" aria-labelledby="overview-title">
+        <div class="panel-head"><div><p class="kicker">Overview</p><h2 id="overview-title">A single evidence packet for cluster triage</h2><p class="intro">The engine reads from Google Cloud APIs and a Monarch-backed Prometheus query endpoint, then turns the results into a timestamped incident report.</p></div><span class="tag">Run on demand or schedule</span></div>
+        <div class="grid-2">
+          <div>
+            <div class="statement"><p><strong>Purpose:</strong> shorten first-pass investigation by collecting signals for one configured GKE cluster and time window, correlating them by time, and surfacing actionable evidence with likely causes.</p></div>
+            <div class="tiles">
+              <button class="tile" type="button" data-overview="metrics" aria-haspopup="dialog" aria-controls="architecture-dialog"><b>Metrics</b><span>PromQL samples: resource use, application traffic, and pod conditions.</span></button>
+              <button class="tile" type="button" data-overview="alerts" aria-haspopup="dialog" aria-controls="architecture-dialog"><b>Alerts</b><span>Open or recently closed Cloud Monitoring alert incidents.</span></button>
+              <button class="tile" type="button" data-overview="logs" aria-haspopup="dialog" aria-controls="architecture-dialog"><b>Logs</b><span>Warning-and-higher Kubernetes container log entries in the selected window.</span></button>
+              <button class="tile" type="button" data-overview="pod-failures" aria-haspopup="dialog" aria-controls="architecture-dialog"><b>Pod failures</b><span>Exit codes and Kubernetes waiting, phase, or termination reasons.</span></button>
+            </div>
+          </div>
+          <aside class="note"><h3>What it produces</h3><p>Each run saves a machine-readable JSON report and a Markdown handoff summary.</p><ul><li>Correlated incident groups and shared labels</li><li>Ranked RCA hypotheses with evidence</li><li>Collection errors and notification delivery status</li></ul></aside>
+        </div>
+      </section>
+
+      <section class="panel" id="problem" data-panel="problem" aria-labelledby="problem-title" hidden>
+        <div class="panel-head"><div><p class="kicker">Use case / problem statement</p><h2 id="problem-title">Incident clues are scattered across tools</h2><p class="intro">During a Kubernetes incident, engineers often need to switch between dashboards, alert pages, and logs before a shared timeline is visible.</p></div><span class="tag">Operational pain point</span></div>
+        <div class="issues">
+          <button class="issue" type="button" data-use-case="collection" aria-haspopup="dialog" aria-controls="architecture-dialog"><b>Collection is repetitive</b><p>Metrics, alert incidents, and container logs need separate queries and time filters.</p></button>
+          <button class="issue" type="button" data-use-case="failures" aria-haspopup="dialog" aria-controls="architecture-dialog"><b>Failure details are easy to miss</b><p>Exit codes, restart patterns, image pull errors, scheduling problems, and OOM events can be buried in different signals.</p></button>
+          <button class="issue" type="button" data-use-case="handoffs" aria-haspopup="dialog" aria-controls="architecture-dialog"><b>Handoffs lack a common snapshot</b><p>Different query windows and ad hoc notes make it harder for the next responder to see what happened together.</p></button>
+          <button class="issue highlight" type="button" data-use-case="response" aria-haspopup="dialog" aria-controls="architecture-dialog"><b>Automation response</b><p>One configured run collects the available evidence, groups nearby signals, flags configured thresholds and pod failures, then writes a reviewable report and optional notification.</p></button>
+        </div>
+        <div class="callout"><strong>Design boundary:</strong> RCA is a ranked, explainable hypothesis based on matching rules and time proximity. It helps direct investigation; it does not prove causation or remediate the cluster.</div>
+      </section>
+
+      <section class="panel" id="architecture" data-panel="architecture" aria-labelledby="architecture-title" hidden>
+        <div class="panel-head"><div><p class="kicker">Architecture</p><h2 id="architecture-title">Four evidence sources, one reporting engine</h2><p class="intro">Monarch is accessed through the documented Managed Service for Prometheus query API. Cloud Monitoring and Cloud Logging provide alert and log records.</p></div><span class="tag">ADC Â· read-only APIs</span></div>
+        <div class="diagram-wrap">
+          <svg class="diagram architecture-diagram" viewBox="0 0 1240 500" role="img" aria-labelledby="svg-title svg-desc">
+            <title id="svg-title">Detailed GKE reporting engine architecture</title>
+            <desc id="svg-desc">Input YAML configures a Python process authenticated by Application Default Credentials. The collector calls Monarch-backed Prometheus, Cloud Monitoring, and Cloud Logging APIs, evaluates metric and pod-failure rules, correlates evidence, ranks RCA hypotheses, sends optional notifications, and writes JSON and Markdown files.</desc>
+            <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8Z" fill="#729984"></path></marker></defs>
+            <text class="label" x="22" y="27">INPUTS &amp; GOOGLE CLOUD SOURCES</text><text class="label" x="358" y="27">PYTHON PROCESS</text><text class="label" x="960" y="27">OUTPUTS</text>
+            <path class="line" d="M270 94H330V104H365"></path><path class="line" d="M270 192H330V176H365"></path><path class="line" d="M270 290H330V242H365"></path><path class="line" d="M270 388H330V314H365"></path>
+            <path class="line" d="M875 404H920V140H965"></path><path class="line" d="M875 404H930V354H965"></path>
+            <g class="architecture-card" role="button" tabindex="0" aria-haspopup="dialog" data-architecture="input-yaml" aria-label="Explain architecture box: Input YAML"><rect class="box source" x="22" y="52" width="248" height="84" rx="12"></rect><text class="label" x="40" y="78">Input YAML</text><text class="detail" x="40" y="99">Project, cluster, location, time windows</text><text class="detail" x="40" y="117">PromQL, thresholds, log filter, channels</text></g>
+            <g class="architecture-card" role="button" tabindex="0" aria-haspopup="dialog" data-architecture="prometheus" aria-label="Explain architecture box: Managed Prometheus"><rect class="box source" x="22" y="150" width="248" height="84" rx="12"></rect><text class="label" x="40" y="176">Managed Prometheus</text><text class="detail" x="40" y="197">Metrics API backed by Monarch</text><text class="detail" x="40" y="215">Utilization, app signals, pod state</text></g>
+            <g class="architecture-card" role="button" tabindex="0" aria-haspopup="dialog" data-architecture="monitoring" aria-label="Explain architecture box: Cloud Monitoring API"><rect class="box source" x="22" y="248" width="248" height="84" rx="12"></rect><text class="label" x="40" y="274">Cloud Monitoring API</text><text class="detail" x="40" y="295">Open and recently closed incidents</text><text class="detail" x="40" y="313">Policy severity and resource labels</text></g>
+            <g class="architecture-card" role="button" tabindex="0" aria-haspopup="dialog" data-architecture="logging" aria-label="Explain architecture box: Cloud Logging API"><rect class="box source" x="22" y="346" width="248" height="84" rx="12"></rect><text class="label" x="40" y="372">Cloud Logging API</text><text class="detail" x="40" y="393">Cluster-filtered warning+ entries</text><text class="detail" x="40" y="411">Text / JSON payload and resource labels</text></g>
+            <text class="small" x="22" y="461">Credentials: ADC Â· scopes: monitoring.read + logging.read</text>
+            <rect class="group" x="365" y="52" width="510" height="390" rx="17"></rect><text class="group-title" x="387" y="79">reporting_correlation_engine.py</text>
+            <rect class="subbox architecture-card" role="button" tabindex="0" aria-haspopup="dialog" data-architecture="load-validate" aria-label="Explain architecture box: Load and validate" x="387" y="93" width="466" height="54" rx="9"></rect><text class="label" x="404" y="116">1 Â· Load &amp; validate</text><text class="detail" x="404" y="135">Resolve config; calculate UTC lookback and query interval</text>
+            <rect class="subbox architecture-card" role="button" tabindex="0" aria-haspopup="dialog" data-architecture="collect" aria-label="Explain architecture box: Collect by source" x="387" y="158" width="466" height="72" rx="9"></rect><text class="label" x="404" y="181">2 Â· Collect by source</text><text class="detail" x="404" y="200">PromQL range queries Â· alert incident listing Â· log entry search</text><text class="detail" x="404" y="217">Capture each source error and continue collecting other data</text>
+            <rect class="subbox architecture-card" role="button" tabindex="0" aria-haspopup="dialog" data-architecture="normalize-evaluate" aria-label="Explain architecture box: Normalize and evaluate" x="387" y="241" width="466" height="67" rx="9"></rect><text class="label" x="404" y="264">3 Â· Normalize &amp; evaluate</text><text class="detail" x="404" y="283">UTC timestamps + entity labels Â· configured thresholds</text><text class="detail" x="404" y="300">Exit codes, CrashLoop, image pull, Pending, OOM, Evicted</text>
+            <rect class="subbox architecture-card" role="button" tabindex="0" aria-haspopup="dialog" data-architecture="correlate-rca" aria-label="Explain architecture box: Correlate and rank RCA" x="387" y="319" width="466" height="54" rx="9"></rect><text class="label" x="404" y="342">4 Â· Correlate &amp; rank RCA</text><text class="detail" x="404" y="361">Fixed-anchor time groups Â· evidence-based hypotheses</text>
+            <rect class="subbox architecture-card" role="button" tabindex="0" aria-haspopup="dialog" data-architecture="assemble-report" aria-label="Explain architecture box: Assemble report and delivery status" x="387" y="384" width="466" height="40" rx="9"></rect><text class="label" x="404" y="409">5 Â· Assemble report and delivery status</text>
+            <rect class="box output architecture-card" role="button" tabindex="0" aria-haspopup="dialog" data-architecture="report-files" aria-label="Explain architecture box: Local report files" x="965" y="75" width="250" height="132" rx="14"></rect><text class="label" x="986" y="103">Local report files</text><text class="detail" x="986" y="126">Timestamped JSON: signals, groups, RCA</text><text class="detail" x="986" y="145">evidence, errors, notification status</text><text class="detail" x="986" y="174">Markdown: triage summary and findings</text>
+            <rect class="box notify architecture-card" role="button" tabindex="0" aria-haspopup="dialog" data-architecture="notifications" aria-label="Explain architecture box: Optional notifications" x="965" y="280" width="250" height="148" rx="14"></rect><text class="label" x="986" y="309">Optional notifications</text><text class="detail" x="986" y="333">SMTP email and/or JSON webhook</text><text class="detail" x="986" y="354">Secrets supplied through environment</text><text class="detail" x="986" y="382">Actionable findings by default</text><text class="detail" x="986" y="403">Empty digest can be enabled</text>
+          </svg>
+        </div>
+        <p class="caption">The script does not call an undocumented Monarch endpoint. It uses Google Cloud APIs with Application Default Credentials and read scopes.</p>
+      </section>
+
+      <section class="panel" id="flow" data-panel="flow" aria-labelledby="flow-title" hidden>
+        <div class="panel-head"><div><p class="kicker">Automation flow</p><h2 id="flow-title">From YAML inputs to an incident handoff</h2><p class="intro">A run is bounded by the configured lookback and correlation windows. Failures in one source are recorded so available evidence can still be reported.</p></div><span class="tag">Python Â· YAML</span></div>
+        <div class="diagram-wrap">
+          <svg class="flow-diagram" viewBox="0 0 1200 850" role="img" aria-labelledby="flow-svg-title flow-svg-desc">
+            <title id="flow-svg-title">Detailed reporting and correlation automation flow</title>
+            <desc id="flow-svg-desc">The command loads and validates YAML, supports validate-only exit, authenticates with ADC, collects Prometheus metrics then Monitoring alerts then Logging entries, normalizes results, evaluates thresholds and pod failures, correlates signals into time groups, ranks RCA evidence, builds the report, conditionally sends notifications, then writes JSON and Markdown reports.</desc>
+            <defs><marker id="flow-arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8Z" fill="#729984"></path></marker></defs>
+            <!-- Main path snakes across each row to keep the sequence readable. -->
+            <path class="flow-line" d="M370 77H425"></path><path class="flow-line" d="M775 77H830"></path>
+            <path class="flow-line" d="M1005 120V165"></path><path class="flow-line" d="M830 208H775"></path><path class="flow-line" d="M425 208H370"></path>
+            <path class="flow-line" d="M195 251V295"></path><path class="flow-line" d="M370 338H425"></path><path class="flow-line" d="M775 338H830"></path>
+            <path class="flow-line" d="M1005 381V425"></path><path class="flow-line" d="M830 468H775"></path>
+
+            <g class="stage-card" role="button" tabindex="0" aria-haspopup="dialog" data-stage="1" aria-label="Explain stage 1: Start run and load input"><rect class="step-box step-config" x="20" y="34" width="350" height="86" rx="13"></rect><text class="step-title" x="40" y="60">1 Â· Start run and load input</text><text class="step-detail" x="40" y="82">CLI reads reporting_input.yaml: project, cluster,</text><text class="step-detail" x="40" y="101">lookback, queries, thresholds, and destinations</text></g>
+            <g class="stage-card" role="button" tabindex="0" aria-haspopup="dialog" data-stage="2" aria-label="Explain stage 2: Validate configuration"><rect class="step-box step-config" x="425" y="34" width="350" height="86" rx="13"></rect><text class="step-title" x="445" y="60">2 Â· Validate configuration</text><text class="step-detail" x="445" y="82">Check required values, positive limits, PromQL fields,</text><text class="step-detail" x="445" y="101">threshold operators, and notification channel setup</text></g>
+            <g class="stage-card" role="button" tabindex="0" aria-haspopup="dialog" data-stage="3" aria-label="Explain stage 3: Select execution mode"><rect class="step-box step-config" x="830" y="34" width="350" height="86" rx="13"></rect><text class="step-title" x="850" y="60">3 Â· Select execution mode</text><text class="step-detail" x="850" y="82">--validate-only exits without GCP calls; otherwise</text><text class="step-detail" x="850" y="101">ADC authenticates and UTC query bounds are computed</text></g>
+
+            <g class="stage-card" role="button" tabindex="0" aria-haspopup="dialog" data-stage="4" aria-label="Explain stage 4: Collect Monarch-backed metrics"><rect class="step-box step-collect" x="830" y="165" width="350" height="86" rx="13"></rect><text class="step-title" x="850" y="191">4 Â· Collect Monarch-backed metrics</text><text class="step-detail" x="850" y="213">Run each enabled PromQL range query; keep labels,</text><text class="step-detail" x="850" y="232">timestamps, samples, and threshold metadata</text></g>
+            <g class="stage-card" role="button" tabindex="0" aria-haspopup="dialog" data-stage="5" aria-label="Explain stage 5: Collect Monitoring incidents"><rect class="step-box step-collect" x="425" y="165" width="350" height="86" rx="13"></rect><text class="step-title" x="445" y="191">5 Â· Collect Monitoring incidents</text><text class="step-detail" x="445" y="213">Page through open/recent alerts; filter to cluster</text><text class="step-detail" x="445" y="232">and retain policy, state, severity, and resource labels</text></g>
+            <g class="stage-card" role="button" tabindex="0" aria-haspopup="dialog" data-stage="6" aria-label="Explain stage 6: Collect Cloud Logging entries"><rect class="step-box step-collect" x="20" y="165" width="350" height="86" rx="13"></rect><text class="step-title" x="40" y="191">6 Â· Collect Cloud Logging entries</text><text class="step-detail" x="40" y="213">Apply configured filter, cluster, and time window;</text><text class="step-detail" x="40" y="232">retain severity, message, and resource metadata</text></g>
+
+            <g class="stage-card" role="button" tabindex="0" aria-haspopup="dialog" data-stage="7" aria-label="Explain stage 7: Normalize and retain errors"><rect class="step-box" x="20" y="295" width="350" height="86" rx="13"></rect><text class="step-title" x="40" y="321">7 Â· Normalize and retain errors</text><text class="step-detail" x="40" y="343">Standardize UTC time and cluster / namespace / pod</text><text class="step-detail" x="40" y="362">labels; record source failures without losing other data</text></g>
+            <g class="stage-card" role="button" tabindex="0" aria-haspopup="dialog" data-stage="8" aria-label="Explain stage 8: Evaluate thresholds and pod failures"><rect class="step-box step-assess" x="425" y="295" width="350" height="86" rx="13"></rect><text class="step-title" x="445" y="321">8 Â· Evaluate thresholds and pod failures</text><text class="step-detail" x="445" y="343">Check configured metric limits; classify exit codes</text><text class="step-detail" x="445" y="362">and CrashLoop, image pull, Pending, OOM, Evicted</text></g>
+            <g class="stage-card" role="button" tabindex="0" aria-haspopup="dialog" data-stage="9" aria-label="Explain stage 9: Correlate by time window"><rect class="step-box step-assess" x="830" y="295" width="350" height="86" rx="13"></rect><text class="step-title" x="850" y="321">9 Â· Correlate by time window</text><text class="step-detail" x="850" y="343">Build fixed-anchor groups within the configured</text><text class="step-detail" x="850" y="362">window; preserve shared entity labels as evidence</text></g>
+
+            <g class="stage-card" role="button" tabindex="0" aria-haspopup="dialog" data-stage="10" aria-label="Explain stage 10: Rank root-cause hypotheses"><rect class="step-box step-assess" x="830" y="425" width="350" height="86" rx="13"></rect><text class="step-title" x="850" y="451">10 Â· Rank root-cause hypotheses</text><text class="step-detail" x="850" y="473">Apply explainable rules to alert, threshold, pod</text><text class="step-detail" x="850" y="492">failure, and error-log evidence; score repetition</text></g>
+            <g class="stage-card" role="button" tabindex="0" aria-haspopup="dialog" data-stage="11" aria-label="Explain stage 11: Assemble incident report"><rect class="step-box" x="425" y="425" width="350" height="86" rx="13"></rect><text class="step-title" x="445" y="451">11 Â· Assemble incident report</text><text class="step-detail" x="445" y="473">Add signal counts, incident groups, RCA evidence,</text><text class="step-detail" x="445" y="492">collection errors, time range, and cluster identity</text></g>
+
+            <g class="stage-card" role="button" tabindex="0" aria-haspopup="dialog" data-stage="12" aria-label="Explain stage 12: Actionable finding and notification decision"><polygon class="branch" points="470,620 600,565 730,620 600,675"></polygon>
+            <path class="flow-line" d="M600 511V565"></path>
+            <text class="step-title" text-anchor="middle" x="600" y="613">12 Â· Actionable finding</text><text class="branch-label" text-anchor="middle" x="600" y="633">AND notification enabled?</text>
+            </g>
+            <text class="branch-label" x="405" y="599">YES</text><text class="branch-label" x="765" y="599">NO / disabled</text>
+            <path class="flow-line" d="M470 620H365V720"></path><path class="flow-line" d="M730 620H835V720"></path>
+
+            <g class="stage-card" role="button" tabindex="0" aria-haspopup="dialog" data-stage="13a" aria-label="Explain stage 13a: Send configured notification"><rect class="step-box step-notify" x="190" y="720" width="350" height="86" rx="13"></rect><text class="step-title" x="210" y="746">13a Â· Send configured notification</text><text class="step-detail" x="210" y="768">SMTP email and/or JSON webhook; record success</text><text class="step-detail" x="210" y="787">or delivery error in notification status</text></g>
+            <g class="stage-card" role="button" tabindex="0" aria-haspopup="dialog" data-stage="13b" aria-label="Explain stage 13b: Skip delivery"><rect class="step-box" x="660" y="720" width="350" height="86" rx="13"></rect><text class="step-title" x="680" y="746">13b Â· Skip delivery</text><text class="step-detail" x="680" y="768">Record disabled or no actionable finding;</text><text class="step-detail" x="680" y="787">continue to local report output</text></g>
+            <path class="flow-merge" d="M365 806V815H600"></path><path class="flow-merge" d="M835 806V815H600"></path>
+            <path class="flow-line" d="M600 815V822"></path>
+            <g class="stage-card" role="button" tabindex="0" aria-haspopup="dialog" data-stage="14" aria-label="Explain stage 14: Write timestamped JSON and Markdown reports"><rect class="step-box step-output" x="430" y="822" width="340" height="26" rx="9"></rect><text class="step-title" text-anchor="middle" x="600" y="841">14 Â· Write timestamped JSON + Markdown reports</text></g>
+          </svg>
+        </div>
+        <div class="diagram-legend" aria-label="Flow diagram color key">
+          <span class="legend-item"><i class="legend-swatch" style="--swatch:#4285f4"></i>Configuration and authentication</span>
+          <span class="legend-item"><i class="legend-swatch" style="--swatch:#9aa0a6"></i>Signal collection</span>
+          <span class="legend-item"><i class="legend-swatch" style="--swatch:#fbbc04"></i>Evaluation and RCA</span>
+          <span class="legend-item"><i class="legend-swatch" style="--swatch:#34a853"></i>Saved report</span>
+          <span class="legend-item"><i class="legend-swatch" style="--swatch:#ea4335"></i>Optional notification</span>
+        </div>
+        <p class="caption">Read each row in arrow direction; the flow snakes into the next row. Scroll horizontally on narrower screens. The final decision sends a notification only when the condition and channel settings permit it.</p>
+        <div class="callout"><strong>RCA interpretation:</strong> hypotheses are triage clues based on rules and time proximity, not proof of cause. Notifications are disabled by default; <code>notify_on_empty</code> can send an empty digest. This version does not deduplicate recurring conditions across scheduled runs.</div>
+      </section>
+
+      <section class="panel" id="pod-failures" data-panel="pod-failures" aria-labelledby="failure-title" hidden>
+        <div class="panel-head"><div><p class="kicker">Pod failure coverage</p><h2 id="failure-title">Failures are surfaced as actionable evidence</h2><p class="intro">PromQL checks look for kube-state-metrics series. The log classifier recognizes common reasons and explicit exit-code phrases when they appear in collected log messages.</p></div><span class="tag">One matching series is actionable</span></div>
+        <span class="severity">Severity follows configured rule</span>
+        <p class="intro" style="margin:-7px 0 14px">Select a failure to see what it means and what to investigate.</p>
+        <div class="failure-grid">
+          <button class="failure" type="button" data-failure="127" aria-haspopup="dialog" aria-controls="failure-dialog"><code>127</code><span>Command not found</span></button>
+          <button class="failure" type="button" data-failure="126" aria-haspopup="dialog" aria-controls="failure-dialog"><code>126</code><span>Permission denied / cannot execute</span></button>
+          <button class="failure" type="button" data-failure="1" aria-haspopup="dialog" aria-controls="failure-dialog"><code>1</code><span>Application process error</span></button>
+          <button class="failure" type="button" data-failure="137" aria-haspopup="dialog" aria-controls="failure-dialog"><code>137</code><span>SIGKILL; commonly OOM-related</span></button>
+          <button class="failure" type="button" data-failure="139" aria-haspopup="dialog" aria-controls="failure-dialog"><code>139</code><span>Segmentation fault / SIGSEGV</span></button>
+          <button class="failure" type="button" data-failure="143" aria-haspopup="dialog" aria-controls="failure-dialog"><code>143</code><span>SIGTERM / graceful termination</span></button>
+          <button class="failure" type="button" data-failure="CrashLoopBackOff" aria-haspopup="dialog" aria-controls="failure-dialog"><code>CrashLoopBackOff</code><span>Container repeatedly exits</span></button>
+          <button class="failure" type="button" data-failure="ImagePullBackOff" aria-haspopup="dialog" aria-controls="failure-dialog"><code>ImagePullBackOff</code><span>Image cannot be pulled</span></button>
+          <button class="failure" type="button" data-failure="Pending" aria-haspopup="dialog" aria-controls="failure-dialog"><code>Pending</code><span>Scheduling or resource constraint</span></button>
+          <button class="failure" type="button" data-failure="OOMKilled" aria-haspopup="dialog" aria-controls="failure-dialog"><code>OOMKilled</code><span>Container exceeded its memory limit</span></button>
+          <button class="failure" type="button" data-failure="Evicted" aria-haspopup="dialog" aria-controls="failure-dialog"><code>Evicted</code><span>Pod removed due to node pressure</span></button>
+        </div>
+        <div class="scope-note"><strong>Operational notes:</strong> kube-state-metrics collection and expected labels must be available in Managed Service for Prometheus; check them in Metrics Explorer. The last-terminated exit-code series can remain visible until another termination updates it. Pending can be normal during scheduling, and exit 143 can occur during planned rollouts.</div>
+      </section>
+
+      <section class="panel" id="code-base" data-panel="code-base" aria-labelledby="code-title" hidden>
+        <div class="panel-head"><div><p class="kicker">Code base</p><h2 id="code-title">What the Python script does</h2><p class="intro">The source is loaded from <code>reporting_correlation_engine.py</code> in this folder. The input file is separate so cluster values, queries, thresholds, and channels can be changed without editing the collector.</p></div><span class="tag">Current project source</span></div>
+        <div class="tiles" style="margin:0 0 18px">
+          <div class="tile"><b>CloudDataSource</b><span>Authenticates with ADC and calls Monitoring, Prometheus, and Logging read APIs.</span></div>
+          <div class="tile"><b>Correlation + RCA</b><span>Groups by time, retains entity labels, and scores matching rule evidence.</span></div>
+          <div class="tile"><b>Reporting</b><span>Builds an incident list, signal counts, errors, hypotheses, and delivery results.</span></div>
+          <div class="tile"><b>Notifications</b><span>Formats one digest and sends it to optional SMTP and/or JSON webhook channels.</span></div>
+        </div>
+        <div class="code-box"><div class="code-header"><div><h3>reporting_correlation_engine.py</h3><span class="code-meta" id="code-meta">Loading sourceâ€¦</span></div><button class="copy" id="copy-code" type="button">Copy code</button></div><pre><code id="raw-code">Loading current project sourceâ€¦</code></pre></div>
+      </section>
+    </main>
+
+    <footer class="footer"><strong>SITE RELIABILITY ENGINEERING <span>â€” Observability</span></strong><span>Inputs: <a href="reporting_input.yaml">reporting_input.yaml</a> Â· <a href="README.md">README</a></span><span class="owner">Wipro internal - Antony</span></footer>
+    <div class="ticker" role="img" aria-label="WIPRO - SRE Team"><div class="ticker-track" aria-hidden="true"><span>WIPRO - SRE Team&nbsp;&nbsp;â€¢&nbsp;&nbsp;</span><span>WIPRO - SRE Team&nbsp;&nbsp;â€¢&nbsp;&nbsp;</span><span>WIPRO - SRE Team&nbsp;&nbsp;â€¢&nbsp;&nbsp;</span><span>WIPRO - SRE Team&nbsp;&nbsp;â€¢&nbsp;&nbsp;</span></div></div>
+  </div>
+
+  <dialog class="failure-dialog" id="failure-dialog" aria-labelledby="failure-dialog-title" aria-describedby="failure-summary">
+    <div class="dialog-head">
+      <div><span class="dialog-code" id="failure-code"></span><h3 id="failure-dialog-title"></h3></div>
+      <button class="dialog-close" id="failure-close" type="button" aria-label="Close explanation">&times;</button>
+    </div>
+    <div class="dialog-body">
+      <p id="failure-summary"></p>
+      <h4>Common causes</h4><ul id="failure-causes"></ul>
+      <h4>What to check</h4><ul id="failure-checks"></ul>
+      <p class="dialog-tip" id="failure-tip"></p>
+    </div>
+  </dialog>
+
+  <dialog class="failure-dialog stage-dialog" id="stage-dialog" aria-labelledby="stage-dialog-title" aria-describedby="stage-summary">
+    <div class="dialog-head">
+      <div><span class="dialog-code" id="stage-dialog-number"></span><h3 id="stage-dialog-title"></h3></div>
+      <button class="dialog-close" id="stage-dialog-close" type="button" aria-label="Close stage explanation">&times;</button>
+    </div>
+    <div class="dialog-body">
+      <p id="stage-summary"></p>
+      <h4>What happens</h4><ul id="stage-points"></ul>
+      <h4>Result / next step</h4><p id="stage-result"></p>
+    </div>
+  </dialog>
+
+  <dialog class="failure-dialog architecture-dialog" id="architecture-dialog" aria-labelledby="architecture-dialog-title" aria-describedby="architecture-summary">
+    <div class="dialog-head">
+      <div><span class="dialog-code" id="architecture-dialog-label">Architecture component</span><h3 id="architecture-dialog-title"></h3></div>
+      <button class="dialog-close" id="architecture-dialog-close" type="button" aria-label="Close architecture explanation">&times;</button>
+    </div>
+    <div class="dialog-body">
+      <p id="architecture-summary"></p>
+      <h4>What it does</h4><ul id="architecture-points"></ul>
+      <h4>Output / next step</h4><p id="architecture-result"></p>
+    </div>
+  </dialog>
+
+  <script>
+    (() => {
+      const cards = [...document.querySelectorAll('[data-section]')];
+      const panels = [...document.querySelectorAll('[data-panel]')];
+      const codeNode = document.getElementById('raw-code');
+      const codeMeta = document.getElementById('code-meta');
+      const failureDialog = document.getElementById('failure-dialog');
+      const failureTitle = document.getElementById('failure-dialog-title');
+      const failureCode = document.getElementById('failure-code');
+      const failureSummary = document.getElementById('failure-summary');
+      const failureCauses = document.getElementById('failure-causes');
+      const failureChecks = document.getElementById('failure-checks');
+      const failureTip = document.getElementById('failure-tip');
+      const stageDialog = document.getElementById('stage-dialog');
+      const stageDialogNumber = document.getElementById('stage-dialog-number');
+      const stageDialogTitle = document.getElementById('stage-dialog-title');
+      const stageSummary = document.getElementById('stage-summary');
+      const stagePoints = document.getElementById('stage-points');
+      const stageResult = document.getElementById('stage-result');
+      const architectureDialog = document.getElementById('architecture-dialog');
+      const architectureDialogLabel = document.getElementById('architecture-dialog-label');
+      const architectureDialogTitle = document.getElementById('architecture-dialog-title');
+      const architectureSummary = document.getElementById('architecture-summary');
+      const architecturePoints = document.getElementById('architecture-points');
+      const architectureResult = document.getElementById('architecture-result');
+      let codeText = '';
+
+      const useCaseDetails = {
+        collection: {title:"Collection is repetitive", summary:"Cluster metrics, alert incidents, and logs are queried through separate Google Cloud APIs, each with its own request shape and filters.", points:["The script runs enabled PromQL queries over one configured time interval.","It retrieves Cloud Monitoring alert incidents and Cloud Logging entries for the selected cluster and time range.","Configuration keeps project, cluster, filters, query expressions, and limits in one YAML file."], result:"Signals are normalized into a common report shape so responders can review them together instead of manually assembling separate snapshots."},
+        failures: {title:"Failure details are easy to miss", summary:"A container's exit code, Kubernetes waiting reason, or pod phase may be visible in different telemetry sources and may not appear in application logs.", points:["Configured PromQL queries look for listed exit codes and kube-state pod reasons.","The log collector classifies explicit exit-code phrases and common failure text when present.","Threshold breaches and matched pod failures are marked actionable and can contribute RCA evidence."], result:"Pod-state coverage depends on the required kube-state-metrics series and labels being available. Missing series or sparse log messages can leave details unavailable."},
+        handoffs: {title:"Handoffs lack a common snapshot", summary:"Ad hoc queries and inconsistent time windows make it hard to pass incident context from one responder to another.", points:["Each run uses one configured UTC lookback interval and correlation window.","The report preserves timestamps, labels, signal counts, collection errors, and supporting evidence.","Correlated groups and ranked hypotheses are included in both machine-readable and human-readable outputs."], result:"Timestamped JSON and Markdown files provide a repeatable handoff. Correlation is based on time and cluster context, not proof of causation."},
+        response: {title:"Automation response", summary:"One configured run collects available telemetry and builds an operator-reviewable incident report.", points:["Validate YAML, authenticate with Application Default Credentials, then query metrics, alerts, and logs.","Evaluate configured thresholds and pod-failure rules; correlate signals and rank rule-based RCA hypotheses.","Optionally send an SMTP or webhook digest when notifications are configured."], result:"The engine writes JSON and Markdown reports. Notifications are disabled by default; it does not automatically remediate the cluster or prove root cause."}
+      };
+
+      const overviewDetails = {
+        metrics: {title:"Metrics", summary:"Prometheus time series provide numeric measurements for the configured cluster and time interval.", points:["Managed Service for Prometheus queries Monarch-backed metrics with the configured PromQL expressions.","The sample includes CPU and memory utilization, application request rate, latency and error-rate queries, plus restart and pod-state signals.","Configured metric values are compared with their thresholds; samples retain timestamps and resource labels."], result:"The report contains matching metric samples and marks configured threshold breaches as actionable. Application and kube-state metrics require their exporters and series to be available."},
+        alerts: {title:"Cloud Monitoring alerts", summary:"Existing Cloud Monitoring incidents add policy-generated alert context to the metrics, logs, and pod signals collected by this run.", points:["The script reads alerts that overlap the configured lookback window.","It retains alert state, policy severity, metric details, timestamps, and resource labels.","Alerts clearly labeled for a different cluster are excluded; unscoped alerts are excluded by default."], result:"Included alerts join the time-window correlation and RCA evidence. This automation reads incidents; it does not create or modify alerting policies."},
+        logs: {title:"Cloud Logging entries", summary:"Cloud Logging provides container log messages and resource metadata for the configured cluster and period.", points:["The sample filter selects WARNING-and-higher Kubernetes container entries.","The query applies the cluster and UTC time bounds and reads up to the configured entry limit.","Messages are checked for common errors, OOM clues, and explicit pod failure reasons or exit-code phrases."], result:"Relevant log entries appear as evidence in the report. Kubernetes event and status detail may be absent from application logs and instead depends on configured pod metrics."},
+        "pod-failures": {title:"Pod failure signals", summary:"The automation watches configured Kubernetes container exit codes and pod-state reasons to highlight common startup, runtime, scheduling, and resource failures.", points:["Checks exit codes 1, 126, 127, 137, 139, and 143.","Checks CrashLoopBackOff, ImagePullBackOff, Pending, OOMKilled, and Evicted when their Prometheus series are available.","Also classifies matching error text in collected log messages and adds a failure hypothesis."], result:"A matched condition becomes actionable and can trigger configured notifications. kube-state-metrics availability and label names must be confirmed; last-termination codes can persist until another termination updates them."}
+      };
+
+      const architectureDetails = {
+        "input-yaml": {title:"Input YAML", summary:"This is the environment-specific control file. It selects the GCP scoping project and GKE cluster and keeps operational values separate from the Python source.", points:["Sets location, lookback and correlation windows, API timeouts, and collection limits.","Defines PromQL expressions, signal thresholds, and the Cloud Logging filter.","Controls whether alerts without a cluster label are included and configures output and optional notification channels."], result:"The collector loads and validates these settings before beginning a live collection run."},
+        "prometheus": {title:"Managed Service for Prometheus (Monarch-backed)", summary:"The collector queries the documented Cloud Monitoring Prometheus API, which exposes the configured Prometheus data backed by Monarch. It does not call an internal Monarch endpoint directly.", points:["Runs enabled PromQL range queries across the configured UTC time interval.","Collects CPU and memory utilization, application request/latency/error signals, and configured pod-state series.","Keeps timestamps, labels, values, units, and threshold results."], result:"Metric samples and any threshold breaches are passed to normalization and time-window correlation."},
+        "monitoring": {title:"Cloud Monitoring API", summary:"This source provides existing alert incidents so the automation can put policy alerts beside metrics and logs in the same report.", points:["Reads open or recently closed incidents overlapping the lookback interval.","Retains alert state, open/close time, policy severity, metric details, and resource labels.","Filters out incidents explicitly labeled for a different cluster; unscoped alerts are ignored by default."], result:"Matching incidents become alert signals for correlation and RCA evidence."},
+        "logging": {title:"Cloud Logging API", summary:"This source retrieves the selected cluster's log entries using the configured filter and time interval.", points:["The sample filter requests WARNING and higher container entries.","Reads bounded pages up to the configured maximum entry count.","Retains severity, timestamp, message payload, log name, and resource labels."], result:"Error text and recognized pod-failure messages can contribute actionable evidence; source errors are reported without discarding other data."},
+        "load-validate": {title:"Load and validate", summary:"The script reads the YAML and checks basic required values and bounds before it makes cloud requests.", points:["Resolves the project, cluster, time windows, collection limits, and enabled queries.","Checks that PromQL fields and threshold operators/values are configured.","Checks notification settings when notifications are enabled."], result:"A valid configuration supplies the parameters used by all collectors; --validate-only stops here without contacting GCP."},
+        "collect": {title:"Collect by source", summary:"The Python process calls the source APIs through its CloudDataSource client. Collection is performed by source, and one source failure is captured rather than stopping all later sources.", points:["Query Monarch-backed metrics through Managed Service for Prometheus.","List Cloud Monitoring alert incidents for the selected interval.","Search Cloud Logging with the configured filter and cluster/time bounds."], result:"Successful calls produce normalized signal records; failed calls are included in collection_errors."},
+        "normalize-evaluate": {title:"Normalize and evaluate", summary:"Signals from different APIs are shaped consistently and evaluated against the configured health and pod-failure rules.", points:["Convert timestamps to UTC and preserve cluster, namespace, pod, node, and container labels when present.","Compare metric values with their configured thresholds.","Recognize configured exit codes and pod conditions such as CrashLoopBackOff, ImagePullBackOff, Pending, OOMKilled, and Evicted."], result:"Actionable metric or pod-failure evidence moves into correlation and RCA. Pod-state metric availability depends on kube-state-metrics collection."},
+        "correlate-rca": {title:"Correlate and rank RCA", summary:"The engine groups signals within a fixed-anchor time window, then applies explainable rules to rank possible causes.", points:["The configured cluster and time window form the broad correlation join; identical pod labels are not required.","Shared entity labels are retained as evidence when available.","Configured threshold breaches, alert metadata, pod failures, and error-log patterns contribute to hypotheses and confidence scores."], result:"The ranking helps guide investigation but does not establish causality."},
+        "assemble-report": {title:"Assemble report and delivery status", summary:"The engine gathers run metadata, signal counts, incident groups, collection errors, and notification outcomes into one report structure.", points:["Includes project, cluster, UTC interval, query counts, and collection errors.","Includes actionable state, shared labels, ranked hypotheses, and supporting evidence for each group.","Tracks email/webhook delivery as sent, failed, skipped, or disabled."], result:"The complete result is written locally in JSON and Markdown formats."},
+        "report-files": {title:"Local report files", summary:"Each run saves two timestamped files in the configured output directory, normally ./reports.", points:["JSON contains the complete signals, incidents, RCA hypotheses, query counts, collection errors, and notification status.","Markdown gives operators a concise summary of actionable groups and evidence.","Filenames include the cluster name and UTC run timestamp."], result:"Use JSON for downstream processing and Markdown for incident handoff or review."},
+        "notifications": {title:"Optional notifications", summary:"The engine can send its incident digest by SMTP email, a JSON webhook, or both. Notifications are disabled by default.", points:["When enabled, actionable alerts, threshold breaches, pod failures, and error-level logs can trigger delivery.","SMTP credentials and webhook URLs are read from environment variables rather than the YAML file.","Delivery success or failure is recorded in the report; cross-run deduplication is not implemented."], result:"The notification outcome is added to the report. Set notify_on_empty only if an empty digest is also desired."}
+      };
+
+      const stageDetails = {
+        "1": {title:"Start run and load input", summary:"The operator starts the reporting script with the selected YAML input file. This file keeps environment-specific settings outside the Python source.", points:["Read the GCP project, GKE cluster, location, lookback window, and correlation window.","Load the enabled PromQL queries and alert thresholds.","Read the Cloud Logging filter and optional notification settings."], result:"A single configuration object defines the target cluster and the boundaries of this collection run."},
+        "2": {title:"Validate configuration", summary:"The script checks the input structure and catches common settings errors before making cloud requests.", points:["Confirm project and cluster identifiers are present.","Check positive timeouts, query limits, sample bounds, and valid threshold operators.","Check that enabled notifications have at least one channel configured."], result:"Invalid configuration stops the run with a clear error. This is structural validation; PromQL syntax and GCP connectivity are checked only during a live run."},
+        "3": {title:"Select execution mode", summary:"The command decides whether to perform local validation only or continue to Google Cloud collection.", points:["With --validate-only, the script validates YAML and exits without GCP calls.","For a live run, Application Default Credentials authenticate API requests using monitoring.read and logging.read scopes.","The script calculates the UTC start and end of the configured lookback window."], result:"The live run is authenticated and has a fixed query interval for all data sources."},
+        "4": {title:"Collect Monarch-backed metrics", summary:"The script runs every enabled PromQL query through the Managed Service for Prometheus query API, which exposes Monarch-backed time series.", points:["Query the configured time range at the selected sampling step.","Keep each sample's timestamp, metric labels, observed value, unit, and PromQL expression.","Compare a sample with its configured threshold and mark breaches."], result:"Metric samples and threshold breach metadata enter the shared signal collection. Missing series or API errors are recorded as collection errors."},
+        "5": {title:"Collect Cloud Monitoring incidents", summary:"The script lists Cloud Monitoring alert incidents and keeps incidents overlapping the configured time window.", points:["Read alert state, open/close times, policy severity, metric details, and resource labels.","Exclude alerts explicitly associated with another cluster.","Ignore alerts with no cluster identity by default unless include_unscoped is enabled."], result:"Matching alert incidents become alert signals that can join nearby metric and log evidence."},
+        "6": {title:"Collect Cloud Logging entries", summary:"The script searches Cloud Logging for entries matching the configured filter, cluster, and UTC time interval.", points:["Use the configured severity filter; the sample input requests WARNING or higher container entries.","Read bounded pages up to max_log_entries.","Keep severity, message text, log name, timestamp, and resource labels."], result:"Log signals can contribute error-pattern hypotheses and pod-failure classifications. A failed Logging request is recorded without discarding other collected signals."},
+        "7": {title:"Normalize signals and retain errors", summary:"Each collector converts timestamps and resource labels into a common signal shape so the reporting stages can process different APIs consistently.", points:["Represent timestamps in UTC and preserve cluster, namespace, pod, container, node, and location labels when present.","Keep source-specific details such as alert state, log message, metric value, and threshold.","Collect API or query failures in a separate collection_errors list."], result:"Signals from successful sources continue through the run even when another source has an error; missing entity labels may limit correlation detail."},
+        "8": {title:"Evaluate thresholds and pod failures", summary:"Configured metric thresholds and pod-failure rules are evaluated to identify actionable signals.", points:["Apply each metric's configured comparison operator and threshold value.","Detect the configured exit codes 1, 126, 127, 137, 139, and 143 from metrics; classify explicit exit-code text in logs.","Detect CrashLoopBackOff, ImagePullBackOff, Pending, OOMKilled, and Evicted using configured pod metrics and matching log text."], result:"Breaches and recognized pod failures are marked actionable and passed to correlation and RCA. kube-state-metrics series must be available for the corresponding PromQL rules."},
+        "9": {title:"Correlate by time window", summary:"Signals are placed into fixed-anchor groups when their timestamps fall within the configured correlation window.", points:["Sort signals by timestamp and group nearby events for the configured cluster.","Keep the observed namespace, pod, node, and container labels as evidence.","A shared time window and cluster provide the broad join; identical pod labels are not required."], result:"Each group represents evidence that occurred near the same time. Temporal association is a triage aid, not proof that one signal caused another."},
+        "10": {title:"Rank root-cause hypotheses", summary:"The engine applies explainable rules to the grouped evidence and ranks matching hypotheses by accumulated evidence.", points:["Use metric breaches, Monitoring alerts, pod-failure reasons, and error-log patterns.","Add evidence and scores for matching rules; repeated matches raise the confidence label.","Keep the evidence snippets so the operator can see why a hypothesis was raised."], result:"The highest-ranked items suggest where to investigate first. They are not an automated diagnosis or causal proof."},
+        "11": {title:"Assemble incident report", summary:"The collected signals and analysis are shaped into the report data structure for this run.", points:["Add project, cluster, time window, and correlation/RCA method descriptions.","Include signal counts, per-query sample counts, incidents, shared labels, hypotheses, and collection errors.","Prepare a notification summary from actionable incidents."], result:"The report is ready for optional delivery and local file output, with partial-collection limitations preserved."},
+        "12": {title:"Check notification conditions", summary:"The automation decides whether a notification should be sent based on enabled settings and actionable findings.", points:["Notifications are disabled globally by default.","When enabled, an actionable alert, threshold breach, pod failure, or error log can trigger the configured channel.","notify_on_empty can allow a digest even when no actionable group was found."], result:"The run enters the send branch when notification settings allow it; otherwise it records a skipped or disabled notification outcome."},
+        "13a": {title:"Send configured notification", summary:"When the notification branch is selected, the engine formats a concise incident digest and sends it through the enabled channels.", points:["SMTP email and a JSON webhook can be enabled independently.","Credentials and webhook URLs come from environment variables, not the YAML file.","Record sent or failed status for each channel."], result:"A notification delivery result is added to the report. Recurring conditions are not deduplicated across scheduled runs."},
+        "13b": {title:"Skip notification delivery", summary:"The engine records that delivery was disabled or that the run had no actionable findings and empty notifications are not enabled.", points:["No outbound message is sent for the skipped channel.","If a channel was enabled but delivery failed, the channel's error is recorded instead.","Report generation continues either way."], result:"The report still contains collected data, hypotheses, collection errors, and the notification outcome."},
+        "14": {title:"Write JSON and Markdown reports", summary:"The run saves timestamped files under the configured output directory after notification outcomes have been collected.", points:["JSON includes the complete signals, incident groups, hypotheses, counts, errors, and notification statuses.","Markdown presents an operator-friendly summary of actionable groups and RCA evidence.","Filenames include the cluster name and UTC run timestamp."], result:"The output files provide both a machine-readable record and a concise handoff for review."}
+      };
+
+      const failureDetails = {
+        "127": {
+          title: "Command not found", summary: "The process exited with code 127 because the command or executable could not be found in the container environment.",
+          causes: ["The image does not contain the executable.", "A command or argument is misspelled, or PATH does not include its location.", "The configured entrypoint or working directory is incorrect."],
+          checks: ["Review the container command and args in the workload spec.", "Check the image contents, PATH, workingDir, and the preceding container logs.", "Compare the running image digest and tag with the expected release."],
+          tip: "Fix the image or workload command, then confirm the replacement pod starts successfully."
+        },
+        "126": {
+          title: "Permission denied / cannot execute", summary: "The command was located but the process could not execute it. Exit code 126 commonly points to file permissions or an incompatible executable.",
+          causes: ["The executable bit is missing or the file is owned by an unexpected user.", "The container security context runs as a user without access.", "A mounted file, script interpreter, or executable format is invalid."],
+          checks: ["Inspect file permissions, ownership, shebang, and mount options in the image.", "Review runAsUser, readOnlyRootFilesystem, and mounted volume permissions.", "Check the exact command and error text in the previous container logs."],
+          tip: "Avoid broad permission changes; grant only the access needed by the workload."
+        },
+        "1": {
+          title: "Application process error", summary: "Exit code 1 is a generic non-zero exit chosen by the application. It signals failure but does not identify the underlying cause by itself.",
+          causes: ["Invalid configuration or missing environment variables.", "An application exception or failed startup dependency.", "A failed initialization, migration, or health precondition."],
+          checks: ["Read logs from the failed attempt, including kubectl logs POD -c CONTAINER --previous.", "Check config maps, secrets, dependency reachability, and recent releases.", "Compare the failure time with alerts and application metrics."],
+          tip: "Use the application logs and the surrounding correlated signals to identify the specific error."
+        },
+        "137": {
+          title: "SIGKILL (exit code 137)", summary: "137 is commonly 128 + SIGKILL (signal 9). Kubernetes often reports OOMKilled when the container was killed after exceeding its memory limit, but other kill sources are possible.",
+          causes: ["Container memory use exceeded its configured limit.", "Node-level memory pressure or an external process sent SIGKILL.", "A forced stop occurred after a termination grace period."],
+          checks: ["Inspect the pod's last termination reason and memory usage around the timestamp.", "Review container memory requests/limits, node pressure, and recent workload changes.", "Compare OOM events with restarts, logs, and other pods on the node."],
+          tip: "Treat 137 as a SIGKILL clue; confirm OOMKilled from pod status or events before concluding memory exhaustion."
+        },
+        "139": {
+          title: "Segmentation fault / SIGSEGV", summary: "Exit code 139 commonly represents 128 + SIGSEGV (signal 11): a process attempted to access invalid memory.",
+          causes: ["A native application or library memory error.", "An incompatible runtime, binary, or shared-library version.", "A defect triggered by particular input or concurrency."],
+          checks: ["Review the previous container logs and any core dump or crash diagnostics.", "Compare the image, runtime, native libraries, and release with a healthy replica.", "Check whether the crash repeats for the same request or workload."],
+          tip: "This usually needs application or runtime debugging; Kubernetes reports the process termination but does not diagnose the code defect."
+        },
+        "143": {
+          title: "SIGTERM / graceful termination", summary: "Exit code 143 commonly represents 128 + SIGTERM (signal 15). Kubernetes or another supervisor asked the process to stop; this may be expected during lifecycle events.",
+          causes: ["A rollout, scale-down, eviction, or pod deletion.", "Liveness failure or node shutdown initiated termination.", "The process did not finish before the grace period and was later force-killed."],
+          checks: ["Check deployment history, pod events, termination timestamps, and node events.", "Review terminationGracePeriodSeconds and whether the application handles SIGTERM.", "Correlate with rollouts, autoscaler activity, and health probe failures."],
+          tip: "A 143 by itself is not proof of an application fault; correlate it with the deployment and pod lifecycle."
+        },
+        "CrashLoopBackOff": {
+          title: "CrashLoopBackOff", summary: "Kubernetes is repeatedly restarting a container that exits, and has increased the delay before trying again. This is a restart state, not the root cause.",
+          causes: ["The application exits during startup or shortly after starting.", "Configuration, secret, dependency, or permission problems.", "A failing liveness probe repeatedly restarts an otherwise running process."],
+          checks: ["Run kubectl describe pod POD and inspect Events and restart count.", "Read the previous container attempt with kubectl logs POD -c CONTAINER --previous.", "Check command/args, probes, config, secrets, and last termination reason."],
+          tip: "Use the previous container logs and last termination details to find the first failure that starts the loop."
+        },
+        "ImagePullBackOff": {
+          title: "ImagePullBackOff", summary: "Kubernetes cannot pull the requested container image and is retrying with backoff. The pod cannot start until the image is available.",
+          causes: ["The image name, registry, or tag is wrong or was removed.", "Registry authentication or imagePullSecrets are missing or invalid.", "The node cannot reach the registry, or a policy blocks access."],
+          checks: ["Use kubectl describe pod POD to see the preceding ErrImagePull message.", "Verify the image reference, registry permissions, service account, and pull secret.", "Check registry/network availability and node access to the registry."],
+          tip: "The pod event usually contains the exact registry response; fix that issue before restarting workloads."
+        },
+        "Pending": {
+          title: "Pending pod", summary: "The pod has been accepted by the cluster but is not yet scheduled or fully ready. A short Pending period can be normal while the scheduler works.",
+          causes: ["Insufficient CPU or memory, quota limits, or no matching node.", "Node taints, affinity/selector rules, or topology constraints block placement.", "A required persistent volume is not bound."],
+          checks: ["Run kubectl describe pod POD and read scheduler Events.", "Review requests, quotas, node capacity, taints, affinity, and selectors.", "Check PVC and storage-class binding if volumes are attached."],
+          tip: "Escalate when Pending persists beyond the workload's expected scheduling window; inspect the scheduler event reason first."
+        },
+        "OOMKilled": {
+          title: "OOMKilled", summary: "The container was terminated after memory exhaustion. This normally means its memory use crossed its container limit; node-level OOM pressure can also be relevant.",
+          causes: ["The configured memory limit is lower than the workload's peak requirement.", "A memory leak, sudden traffic increase, or unusually large input.", "Node memory pressure or competing workloads."],
+          checks: ["Inspect last termination state, memory time series, and pod/node events.", "Compare working-set peaks with the container request and limit.", "Review recent code, traffic, input size, and colocated workloads."],
+          tip: "Use observed workload and SLO data to right-size limits or fix excessive memory use; avoid raising limits without checking node capacity."
+        },
+        "Evicted": {
+          title: "Evicted pod", summary: "The kubelet removed the pod, commonly because the node was under resource pressure and needed to reclaim resources.",
+          causes: ["Node memory, disk, or ephemeral-storage pressure.", "The pod exceeded its ephemeral-storage use or had low priority during pressure.", "A node condition or maintenance event required workload removal."],
+          checks: ["Inspect pod Events and the eviction message for the specific resource.", "Check node conditions, disk space, image/container storage, and memory pressure.", "Review requests, limits, priority class, and capacity across the node pool."],
+          tip: "The eviction message identifies the pressured resource; address node capacity or workload consumption before simply recreating the pod."
+        }
+      };
+
+      function openSection(id, updateHistory = false) {
+        const selected = panels.some(panel => panel.dataset.panel === id) ? id : 'overview';
+        panels.forEach(panel => { panel.hidden = panel.dataset.panel !== selected; });
+        cards.forEach(card => {
+          if (card.dataset.section === selected) card.setAttribute('aria-current', 'page');
+          else card.removeAttribute('aria-current');
+        });
+        if (updateHistory && location.hash !== `#${selected}`) history.pushState(null, '', `#${selected}`);
+        if (selected === 'code-base') loadSource();
+      }
+
+      function fillList(listNode, entries) {
+        listNode.replaceChildren(...entries.map(text => {
+          const item = document.createElement('li');
+          item.textContent = text;
+          return item;
+        }));
+      }
+
+      for (const card of document.querySelectorAll('[data-failure]')) {
+        card.addEventListener('click', () => {
+          const details = failureDetails[card.dataset.failure];
+          if (!details) return;
+          failureCode.textContent = card.dataset.failure;
+          failureTitle.textContent = details.title;
+          failureSummary.textContent = details.summary;
+          fillList(failureCauses, details.causes);
+          fillList(failureChecks, details.checks);
+          failureTip.textContent = details.tip;
+          failureDialog.showModal();
+          document.getElementById('failure-close').focus();
+        });
+      }
+      document.getElementById('failure-close').addEventListener('click', () => failureDialog.close());
+      failureDialog.addEventListener('click', event => {
+        if (event.target === failureDialog) failureDialog.close();
+      });
+      for (const component of document.querySelectorAll('[data-architecture]')) {
+        const openArchitecture = () => {
+          const details = architectureDetails[component.dataset.architecture];
+          if (!details) return;
+          architectureDialogLabel.textContent = 'Architecture component';
+          architectureDialogTitle.textContent = details.title;
+          architectureSummary.textContent = details.summary;
+          fillList(architecturePoints, details.points);
+          architectureResult.textContent = details.result;
+          architectureDialog.showModal();
+          document.getElementById('architecture-dialog-close').focus();
+        };
+        component.addEventListener('click', openArchitecture);
+        component.addEventListener('keydown', event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            openArchitecture();
+          }
+        });
+      }
+      document.getElementById('architecture-dialog-close').addEventListener('click', () => architectureDialog.close());
+      architectureDialog.addEventListener('click', event => {
+        if (event.target === architectureDialog) architectureDialog.close();
+      });
+      for (const card of document.querySelectorAll('[data-use-case]')) {
+        card.addEventListener('click', () => {
+          const details = useCaseDetails[card.dataset.useCase];
+          if (!details) return;
+          architectureDialogLabel.textContent = 'Use case';
+          architectureDialogTitle.textContent = details.title;
+          architectureSummary.textContent = details.summary;
+          fillList(architecturePoints, details.points);
+          architectureResult.textContent = details.result;
+          architectureDialog.showModal();
+          document.getElementById('architecture-dialog-close').focus();
+        });
+      }
+      for (const tile of document.querySelectorAll('[data-overview]')) {
+        tile.addEventListener('click', () => {
+          const details = overviewDetails[tile.dataset.overview];
+          if (!details) return;
+          architectureDialogLabel.textContent = 'Overview signal';
+          architectureDialogTitle.textContent = details.title;
+          architectureSummary.textContent = details.summary;
+          fillList(architecturePoints, details.points);
+          architectureResult.textContent = details.result;
+          architectureDialog.showModal();
+          document.getElementById('architecture-dialog-close').focus();
+        });
+      }
+      for (const stage of document.querySelectorAll('[data-stage]')) {
+        const openStage = () => {
+          const details = stageDetails[stage.dataset.stage];
+          if (!details) return;
+          stageDialogNumber.textContent = `Stage ${stage.dataset.stage}`;
+          stageDialogTitle.textContent = details.title;
+          stageSummary.textContent = details.summary;
+          fillList(stagePoints, details.points);
+          stageResult.textContent = details.result;
+          stageDialog.showModal();
+          document.getElementById('stage-dialog-close').focus();
+        };
+        stage.addEventListener('click', openStage);
+        stage.addEventListener('keydown', event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            openStage();
+          }
+        });
+      }
+      document.getElementById('stage-dialog-close').addEventListener('click', () => stageDialog.close());
+      stageDialog.addEventListener('click', event => {
+        if (event.target === stageDialog) stageDialog.close();
+      });
+
+      async function loadSource() {
+        if (codeText) return;
+        try {
+          const response = await fetch('./reporting_correlation_engine.py', {cache:'no-store'});
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          codeText = await response.text();
+          codeNode.textContent = codeText;
+          codeMeta.textContent = `${codeText.split('\n').length} lines Â· loaded from project folder`;
+        } catch {
+          codeNode.textContent = 'Could not load the source in this browser context. Serve the project folder over HTTP, then open this page at localhost.\n\nFrom this folder run:\npython -m http.server 8000\n\nThen open http://localhost:8000/index.html';
+          codeMeta.textContent = 'Source unavailable';
+        }
+      }
+
+      cards.forEach(card => card.addEventListener('click', event => {
+        event.preventDefault(); openSection(card.dataset.section, true);
+      }));
+      window.addEventListener('popstate', () => openSection(location.hash.slice(1)));
+      window.addEventListener('hashchange', () => openSection(location.hash.slice(1)));
+      document.getElementById('copy-code').addEventListener('click', async event => {
+        await loadSource();
+        if (!codeText) { event.currentTarget.textContent = 'Source unavailable'; return; }
+        try {
+          await navigator.clipboard.writeText(codeText);
+          event.currentTarget.textContent = 'Copied';
+        } catch { event.currentTarget.textContent = 'Select code to copy'; }
+        setTimeout(() => { event.currentTarget.textContent = 'Copy code'; }, 1500);
+      });
+      openSection(location.hash.slice(1));
+    })();
+  </script>
+</body>
+</html>

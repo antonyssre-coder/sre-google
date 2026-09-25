@@ -1,0 +1,144 @@
+# Environment-specific inputs. Replace placeholders before running.
+# Keep secrets out of this file; credentials and notification secrets use env vars.
+gcp:
+  project_id: "YOUR_GCP_SCOPING_PROJECT_ID"
+  gke_cluster: "YOUR_GKE_CLUSTER_NAME"
+  location: "YOUR_GKE_LOCATION" # Set the cluster's region/zone; available for PromQL {location} templates.
+  lookback_minutes: 60
+  correlation_window_minutes: 10
+  request_timeout_seconds: 30
+  max_log_entries: 500
+  max_alerts: 500
+  max_points_per_query: 1500
+
+metrics:
+  enabled: true
+  step_seconds: 60
+  queries:
+    cpu_utilization_percent:
+      # GKE system metric: 5-minute mean CPU limit utilization, expressed as percent.
+      promql: '100 * avg_over_time(kubernetes_io:container_cpu_limit_utilization{cluster_name="{cluster}"}[5m])'
+      threshold:
+        operator: ">="
+        value: 80
+        unit: "% of container CPU limit (5-minute mean)"
+        severity: "WARNING"
+    memory_utilization_percent:
+      # GKE system metric: 5-minute mean memory limit utilization, expressed as percent.
+      promql: '100 * avg_over_time(kubernetes_io:container_memory_limit_utilization{cluster_name="{cluster}"}[5m])'
+      threshold:
+        operator: ">="
+        value: 80
+        unit: "% of container memory limit (5-minute mean)"
+        severity: "WARNING"
+    request_rate_rps:
+      # OpenTelemetry HTTP server request-duration histogram count; rate is requests/sec.
+      # No universal alert threshold: configure one from the service's normal traffic/SLO.
+      promql: 'sum by (cluster_name, namespace_name, pod_name) (rate(http_server_request_duration_seconds_count{cluster_name="{cluster}"}[5m]))'
+    p95_latency_ms:
+      # Starter threshold only. Replace 1000 ms and the 1 RPS floor with service SLO/traffic values.
+      promql: >-
+        (1000 * histogram_quantile(0.95, sum by (le, cluster_name, namespace_name, pod_name) (rate(http_server_request_duration_seconds_bucket{cluster_name="{cluster}"}[5m]))))
+        and on (cluster_name, namespace_name, pod_name)
+        (sum by (cluster_name, namespace_name, pod_name) (rate(http_server_request_duration_seconds_count{cluster_name="{cluster}"}[5m])) >= 1)
+      threshold:
+        operator: ">="
+        value: 1000
+        unit: "milliseconds p95 (starter threshold; tune to SLO)"
+        severity: "WARNING"
+    http_5xx_error_rate_percent:
+      # Uses the OpenTelemetry HTTP response status attribute as a Prometheus label.
+      # 5% and the 1 RPS floor are starting values; tune both to the service SLO/traffic.
+      promql: >-
+        (100 * sum by (cluster_name, namespace_name, pod_name) (rate(http_server_request_duration_seconds_count{cluster_name="{cluster}",http_response_status_code=~"5.."}[5m]))
+        / sum by (cluster_name, namespace_name, pod_name) (rate(http_server_request_duration_seconds_count{cluster_name="{cluster}"}[5m])))
+        and on (cluster_name, namespace_name, pod_name)
+        (sum by (cluster_name, namespace_name, pod_name) (rate(http_server_request_duration_seconds_count{cluster_name="{cluster}"}[5m])) >= 1)
+      threshold:
+        operator: ">="
+        value: 5
+        unit: "% of HTTP requests returning 5xx (starter threshold; tune to SLO)"
+        severity: "WARNING"
+    container_restarts_10m:
+      # GKE system metric; alert when a container has restarted at least 3 times in 10 minutes.
+      promql: 'sum by (cluster_name, namespace_name, pod_name) (increase(kubernetes_io:container_restart_count{cluster_name="{cluster}"}[10m]))'
+      threshold:
+        operator: ">="
+        value: 3
+        unit: "restarts in 10 minutes"
+        severity: "WARNING"
+    unschedulable_pods:
+      # Requires GKE kube-state metrics collection. Any unschedulable pod is actionable.
+      promql: 'sum by (cluster, namespace, pod) (kube_pod_status_unschedulable{cluster="{cluster}"})'
+      threshold:
+        operator: ">="
+        value: 1
+        unit: "unschedulable pods"
+        severity: "WARNING"
+    pod_failure_exit_1:
+      # kube-state-metrics is required. Last termination code is retained until the next container termination.
+      promql: 'max by (cluster, namespace, pod, container) (kube_pod_container_status_last_terminated_exitcode{cluster="{cluster}"} == 1)'
+      threshold: {operator: ">=", value: 1, unit: "exit code", severity: "ERROR"}
+    pod_failure_exit_126:
+      promql: 'max by (cluster, namespace, pod, container) (kube_pod_container_status_last_terminated_exitcode{cluster="{cluster}"} == 126)'
+      threshold: {operator: ">=", value: 126, unit: "exit code", severity: "ERROR"}
+    pod_failure_exit_127:
+      promql: 'max by (cluster, namespace, pod, container) (kube_pod_container_status_last_terminated_exitcode{cluster="{cluster}"} == 127)'
+      threshold: {operator: ">=", value: 127, unit: "exit code", severity: "ERROR"}
+    pod_failure_exit_137:
+      promql: 'max by (cluster, namespace, pod, container) (kube_pod_container_status_last_terminated_exitcode{cluster="{cluster}"} == 137)'
+      threshold: {operator: ">=", value: 137, unit: "exit code", severity: "ERROR"}
+    pod_failure_exit_139:
+      promql: 'max by (cluster, namespace, pod, container) (kube_pod_container_status_last_terminated_exitcode{cluster="{cluster}"} == 139)'
+      threshold: {operator: ">=", value: 139, unit: "exit code", severity: "ERROR"}
+    pod_failure_exit_143:
+      promql: 'max by (cluster, namespace, pod, container) (kube_pod_container_status_last_terminated_exitcode{cluster="{cluster}"} == 143)'
+      threshold: {operator: ">=", value: 143, unit: "exit code", severity: "WARNING"}
+    pod_failure_crashloopbackoff:
+      promql: 'sum by (cluster, namespace, pod, container) (kube_pod_container_status_waiting_reason{cluster="{cluster}",reason="CrashLoopBackOff"})'
+      threshold: {operator: ">=", value: 1, unit: "affected container", severity: "ERROR"}
+    pod_failure_imagepullbackoff:
+      promql: 'sum by (cluster, namespace, pod, container) (kube_pod_container_status_waiting_reason{cluster="{cluster}",reason="ImagePullBackOff"})'
+      threshold: {operator: ">=", value: 1, unit: "affected container", severity: "ERROR"}
+    pod_failure_pending:
+      promql: 'sum by (cluster, namespace, pod) (kube_pod_status_phase{cluster="{cluster}",phase="Pending"})'
+      threshold: {operator: ">=", value: 1, unit: "pending pod", severity: "WARNING"}
+    pod_failure_oomkilled:
+      promql: 'sum by (cluster, namespace, pod, container) (kube_pod_container_status_last_terminated_reason{cluster="{cluster}",reason="OOMKilled"})'
+      threshold: {operator: ">=", value: 1, unit: "OOMKilled container", severity: "ERROR"}
+    pod_failure_evicted:
+      promql: 'sum by (cluster, namespace, pod) (kube_pod_status_reason{cluster="{cluster}",reason="Evicted"})'
+      threshold: {operator: ">=", value: 1, unit: "evicted pod", severity: "ERROR"}
+    custom_application_metric:
+      # Add a workload-specific PromQL expression (queue depth, DB pool, business KPI, etc.) and enable it.
+      enabled: false
+      promql: ""
+
+logs:
+  enabled: true
+  # The engine adds the configured time range and cluster name automatically.
+  filter: 'resource.type="k8s_container" AND severity>=WARNING'
+
+alerts:
+  enabled: true
+  include_unscoped: false # Ignore project alerts without a cluster label to avoid false correlation.
+
+notifications:
+  enabled: false
+  # Email delivery is optional. SMTP credentials are read from these environment vars.
+  email:
+    enabled: false
+    smtp_host: "smtp.example.com"
+    smtp_port: 587
+    starttls: true
+    from: "gke-observability@example.com"
+    to: ["sre-team@example.com"]
+    username_env: "SMTP_USERNAME"
+    password_env: "SMTP_PASSWORD"
+  # Generic JSON webhook; works with endpoints accepting {"text": "..."}.
+  webhook:
+    enabled: false
+    url_env: "SRE_NOTIFICATION_WEBHOOK_URL"
+
+output:
+  directory: "./reports"
